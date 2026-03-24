@@ -3,18 +3,46 @@
 // KAYAK POLO STATS — index.php
 // ═══════════════════════════════════════════════════════════════════
 
-define('SOURCE_URL', 'https://www.kayak-polo.info/kpmatchs.php?Compet=*&Group=N18&Saison=2026');
-define('CACHE_FILE', __DIR__ . '/cache/matches.json');
-define('CACHE_TTL',  300);
+define('CACHE_TTL', 300);
 
-$JOURNEES = [
+$JOURNEES_N18 = [
+    'J1'      => ['dates' => ['28/03/2026','29/03/2026'],              'lieu' => 'Acigné'],
+    'J2'      => ['dates' => ['25/04/2026'],                           'lieu' => 'Saint-Omer'],
+    'J3'      => ['dates' => ['23/05/2026'],                           'lieu' => 'Avranches'],
+    'Finales' => ['dates' => ['03/07/2026','04/07/2026','05/07/2026'], 'lieu' => 'TBD'],
+];
+$JOURNEES_N15 = [
     'J1'      => ['dates' => ['28/03/2026','29/03/2026'],              'lieu' => 'Acigné'],
     'J2'      => ['dates' => ['25/04/2026'],                           'lieu' => 'Saint-Omer'],
     'J3'      => ['dates' => ['23/05/2026'],                           'lieu' => 'Avranches'],
     'Finales' => ['dates' => ['03/07/2026','04/07/2026','05/07/2026'], 'lieu' => 'TBD'],
 ];
 
-// ── Cookie + actions ───────────────────────────────────────────────
+// ── Cookie compétition ────────────────────────────────────────────
+$selectedCompet = isset($_COOKIE['selected_compet']) ? $_COOKIE['selected_compet'] : null;
+if ($selectedCompet !== 'N15' && $selectedCompet !== 'N18') $selectedCompet = null;
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_compet'])) {
+    $compet = $_POST['compet'] ?? '';
+    if ($compet === 'N15' || $compet === 'N18') {
+        setcookie('selected_compet', $compet, time() + 365*24*3600, '/');
+        setcookie('selected_team', '', time() - 3600, '/');
+        header('Location: /');
+        exit;
+    }
+}
+if (isset($_GET['clear_compet'])) {
+    setcookie('selected_compet', '', time() - 3600, '/');
+    setcookie('selected_team',   '', time() - 3600, '/');
+    header('Location: /');
+    exit;
+}
+
+$sourceUrl = 'https://www.kayak-polo.info/kpmatchs.php?Compet=*&Group=' . ($selectedCompet ?? 'N18') . '&Saison=2026';
+$cacheFile = __DIR__ . '/cache/matches_' . ($selectedCompet ?? 'N18') . '.json';
+$JOURNEES  = $selectedCompet === 'N15' ? $JOURNEES_N15 : $JOURNEES_N18;
+
+// ── Cookie équipe ─────────────────────────────────────────────────
 $selectedTeam = isset($_COOKIE['selected_team']) ? cleanName($_COOKIE['selected_team']) : null;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_team'])) {
@@ -31,18 +59,19 @@ if (isset($_GET['clear_team'])) {
     exit;
 }
 if (isset($_GET['clear_cache'])) {
-    if (file_exists(CACHE_FILE)) unlink(CACHE_FILE);
+    if (file_exists($cacheFile)) unlink($cacheFile);
     header('Location: ' . strtok($_SERVER['REQUEST_URI'],'?'));
     exit;
 }
 
 // ── Scraping + Cache ───────────────────────────────────────────────
 function getMatches(): array {
-    if (file_exists(CACHE_FILE) && (time() - filemtime(CACHE_FILE)) < CACHE_TTL) {
-        $data = json_decode(file_get_contents(CACHE_FILE), true);
+    global $sourceUrl, $cacheFile;
+    if (file_exists($cacheFile) && (time() - filemtime($cacheFile)) < CACHE_TTL) {
+        $data = json_decode(file_get_contents($cacheFile), true);
         if (is_array($data) && count($data) > 0) return $data;
     }
-    $ch = curl_init(SOURCE_URL);
+    $ch = curl_init($sourceUrl);
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_USERAGENT      => 'Mozilla/5.0 (compatible; KayakPoloStats/1.0)',
@@ -54,7 +83,7 @@ function getMatches(): array {
     $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     curl_close($ch);
     if (!$html || $httpCode !== 200) {
-        if (file_exists(CACHE_FILE)) return json_decode(file_get_contents(CACHE_FILE), true) ?: [];
+        if (file_exists($cacheFile)) return json_decode(file_get_contents($cacheFile), true) ?: [];
         return [];
     }
     libxml_use_internal_errors(true);
@@ -110,8 +139,8 @@ function getMatches(): array {
             'arbitre_secondaire' => cleanName($cols[9] ?? ''),
         ];
     }
-    if (!is_dir(dirname(CACHE_FILE))) mkdir(dirname(CACHE_FILE), 0775, true);
-    file_put_contents(CACHE_FILE, json_encode($matches, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+    if (!is_dir(dirname($cacheFile))) mkdir(dirname($cacheFile), 0775, true);
+    file_put_contents($cacheFile, json_encode($matches, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
     return $matches;
 }
 
@@ -367,7 +396,7 @@ if ($selectedTeam && $standings) {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Kayak Polo Stats<?= $selectedTeam ? ' — '.h($myTeamName) : '' ?></title>
-<meta name="description" content="Championnat de France U18 2026 — Classements, matchs et statistiques">
+<meta name="description" content="Championnat de France <?= $selectedCompet === 'N15' ? 'U15' : 'U18' ?> 2026 — Classements, matchs et statistiques">
 <link rel="icon" type="image/png" href="/kps.png">
 <link rel="apple-touch-icon" href="/kps.png">
 <style>
@@ -819,7 +848,33 @@ footer a { color: var(--text3); text-decoration: underline; }
 </head>
 <body>
 
-<?php if (!$selectedTeam): ?>
+<?php if (!$selectedCompet): ?>
+<div class="selector-screen">
+  <img src="/kps.png" alt="KPS" style="width:80px;height:80px;border-radius:18px;margin-bottom:20px;box-shadow:0 4px 16px rgba(58,80,178,.2)">
+  <h1>Kayak Polo Stats</h1>
+  <p>Quelle compétition veux-tu suivre ?</p>
+  <form method="post">
+    <div class="team-grid" style="max-width:400px">
+      <button type="submit" name="set_compet" value="1" class="team-btn"
+              style="padding:22px 20px;font-size:1.1rem;font-weight:700"
+              onclick="document.querySelector('[name=compet]').value='N18'">
+        Championnat U18
+      </button>
+      <button type="submit" name="set_compet" value="1" class="team-btn"
+              style="padding:22px 20px;font-size:1.1rem;font-weight:700"
+              onclick="document.querySelector('[name=compet]').value='N15'">
+        Championnat U15
+      </button>
+    </div>
+    <input type="hidden" name="compet" value="">
+  </form>
+  <p class="selector-note">Ce choix est mémorisé sur cet appareil.</p>
+  <div class="selector-info">
+    Les données sont mises à jour toutes les 5 minutes depuis kayak-polo.info.
+  </div>
+</div>
+
+<?php elseif (!$selectedTeam): ?>
 <div class="selector-screen">
   <img src="/kps.png" alt="KPS" style="width:80px;height:80px;border-radius:18px;margin-bottom:20px;box-shadow:0 4px 16px rgba(58,80,178,.2)">
   <h1>Kayak Polo Stats</h1>
@@ -837,9 +892,9 @@ footer a { color: var(--text3); text-decoration: underline; }
   </form>
   <p class="selector-note">Ce choix est mémorisé sur cet appareil.</p>
   <div class="selector-info">
-    Ce site couvre actuellement uniquement le <strong>Championnat de France U18 2026</strong>.<br>
-    D'autres compétitions (U15, seniors, championnats régionaux...) seront ajoutées prochainement.<br>
-    Les données sont mises à jour toutes les 5 minutes depuis kayak-polo.info.
+    Championnat de France <strong><?= $selectedCompet === 'N15' ? 'U15' : 'U18' ?></strong> 2026.<br>
+    Les données sont mises à jour toutes les 5 minutes depuis kayak-polo.info.<br>
+    <a href="?clear_compet=1" style="color:var(--accent)">Changer de compétition</a>
   </div>
 </div>
 
@@ -851,8 +906,10 @@ footer a { color: var(--text3); text-decoration: underline; }
       Kayak Polo Stats
     </span>
     <span class="topbar-team">
+      <span style="color:var(--text3);font-size:.75rem"><?= $selectedCompet === 'N15' ? 'U15' : 'U18' ?></span>
       <?= h($myTeamName) ?>
       <a href="?clear_team=1">Changer</a>
+      <a href="?clear_compet=1">Compétition</a>
     </span>
   </div>
 </div>
