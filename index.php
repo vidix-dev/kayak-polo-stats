@@ -3,7 +3,52 @@
 // KAYAK POLO STATS — index.php
 // ═══════════════════════════════════════════════════════════════════
 
-define('CACHE_TTL', 300);
+define('CACHE_TTL',  300);
+define('VISIT_LOG',  __DIR__ . '/logs/visits.log');
+define('STATS_KEY',  'kps_vidix_2026');
+
+function logVisit(string $compet, string $team): void {
+    $dir = dirname(VISIT_LOG);
+    if (!is_dir($dir)) mkdir($dir, 0775, true);
+    $ip  = $_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+    $ip  = trim(explode(',', $ip)[0]);
+    $ua  = substr($_SERVER['HTTP_USER_AGENT'] ?? '', 0, 120);
+    $line = implode("\t", [
+        date('Y-m-d H:i:s'),
+        $ip,
+        $compet ?: '-',
+        $team   ?: '-',
+        $ua,
+    ]) . "\n";
+    file_put_contents(VISIT_LOG, $line, FILE_APPEND | LOCK_EX);
+}
+
+if (isset($_GET['stats']) && $_GET['stats'] === STATS_KEY) {
+    header('Content-Type: text/plain; charset=UTF-8');
+    if (!file_exists(VISIT_LOG)) { echo "Aucune visite enregistrée.\n"; exit; }
+    $lines = file(VISIT_LOG, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+    $total = count($lines);
+    $days  = $ips = $compets = [];
+    foreach ($lines as $l) {
+        $p = explode("\t", $l);
+        if (count($p) < 4) continue;
+        $days[substr($p[0],0,10)][$p[1]] = true;
+        $ips[$p[1]] = true;
+        $compets[$p[2]] = ($compets[$p[2]] ?? 0) + 1;
+    }
+    echo "=== Kayak Polo Stats — Visites ===\n\n";
+    echo "Total visites     : $total\n";
+    echo "Visiteurs uniques : " . count($ips) . "\n\n";
+    echo "--- Par jour ---\n";
+    foreach (array_reverse($days, true) as $d => $u) {
+        echo "$d  " . count($u) . " visiteur(s) unique(s)\n";
+    }
+    echo "\n--- Par compétition ---\n";
+    foreach ($compets as $c => $n) echo "$c : $n visite(s)\n";
+    echo "\n--- 20 dernières visites ---\n";
+    foreach (array_slice($lines, -20) as $l) echo $l . "\n";
+    exit;
+}
 
 $JOURNEES_N18 = [
     'J1'      => ['dates' => ['28/03/2026','29/03/2026'],              'lieu' => 'Acigné'],
@@ -356,6 +401,7 @@ function journeeLieu(string $journee): string {
 }
 
 // ── Données ────────────────────────────────────────────────────────
+logVisit($selectedCompet ?? '', $selectedTeam ?? '');
 $matches     = getMatches();
 $allTeams    = getAllTeams($matches);
 $standings   = buildStandings($matches);
