@@ -1297,7 +1297,7 @@ function switchTab(id, btn) {
   btn.classList.add('active');
 }
 (function() {
-  var delay = 1000 + Math.random() * 1000;
+  var delay = Math.random() * 1000;
   var overlay = document.getElementById('loader-overlay');
   setTimeout(function() {
     overlay.classList.add('fade-out');
