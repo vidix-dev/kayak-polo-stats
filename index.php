@@ -3,6 +3,8 @@
 // KAYAK POLO STATS — index.php
 // ═══════════════════════════════════════════════════════════════════
 
+date_default_timezone_set('Europe/Paris');
+
 define('CACHE_TTL',  300);
 define('VISIT_LOG',  __DIR__ . '/logs/visits.log');
 define('STATS_KEY',  'kps_vidix_2026');
@@ -70,15 +72,15 @@ if ($selectedCompet !== 'N15' && $selectedCompet !== 'N18') $selectedCompet = nu
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_compet'])) {
     $compet = $_POST['compet'] ?? '';
     if ($compet === 'N15' || $compet === 'N18') {
-        setcookie('selected_compet', $compet, time() + 365*24*3600, '/');
-        setcookie('selected_team', '', time() - 3600, '/');
+        setcookie('selected_compet', $compet, ['expires'=>time()+365*24*3600,'path'=>'/','secure'=>true,'httponly'=>true,'samesite'=>'Lax']);
+        setcookie('selected_team', '', ['expires'=>time()-3600,'path'=>'/','secure'=>true,'httponly'=>true,'samesite'=>'Lax']);
         header('Location: /');
         exit;
     }
 }
 if (isset($_GET['clear_compet'])) {
-    setcookie('selected_compet', '', time() - 3600, '/');
-    setcookie('selected_team',   '', time() - 3600, '/');
+    setcookie('selected_compet', '', ['expires'=>time()-3600,'path'=>'/','secure'=>true,'httponly'=>true,'samesite'=>'Lax']);
+    setcookie('selected_team',   '', ['expires'=>time()-3600,'path'=>'/','secure'=>true,'httponly'=>true,'samesite'=>'Lax']);
     header('Location: /');
     exit;
 }
@@ -93,13 +95,13 @@ $selectedTeam = isset($_COOKIE['selected_team']) ? cleanName($_COOKIE['selected_
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_team'])) {
     $team = cleanName(trim($_POST['team'] ?? ''));
     if ($team) {
-        setcookie('selected_team', $team, time() + 365*24*3600, '/');
+        setcookie('selected_team', $team, ['expires'=>time()+365*24*3600,'path'=>'/','secure'=>true,'httponly'=>true,'samesite'=>'Lax']);
         header('Location: ' . strtok($_SERVER['REQUEST_URI'],'?'));
         exit;
     }
 }
 if (isset($_GET['clear_team'])) {
-    setcookie('selected_team', '', time() - 3600, '/');
+    setcookie('selected_team', '', ['expires'=>time()-3600,'path'=>'/','secure'=>true,'httponly'=>true,'samesite'=>'Lax']);
     header('Location: /');
     exit;
 }
@@ -107,21 +109,6 @@ if (isset($_GET['clear_cache'])) {
     if (file_exists($cacheFile)) unlink($cacheFile);
     header('Location: ' . strtok($_SERVER['REQUEST_URI'],'?'));
     exit;
-}
-
-// ── Helpers HTTP ───────────────────────────────────────────────────
-function curlGet(string $url): string {
-    $ch = curl_init($url);
-    curl_setopt_array($ch, [
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_USERAGENT      => 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        CURLOPT_TIMEOUT        => 15,
-        CURLOPT_FOLLOWLOCATION => true,
-        CURLOPT_SSL_VERIFYPEER => true,
-    ]);
-    $html = curl_exec($ch);
-    curl_close($ch);
-    return $html ?: '';
 }
 
 // ── Scraping + Cache ───────────────────────────────────────────────
@@ -234,14 +221,14 @@ function buildStandings(array $matches): array {
         $teams[$a]['bp'] += $ga; $teams[$a]['bc'] += $gb;
         $teams[$b]['bp'] += $gb; $teams[$b]['bc'] += $ga;
         if ($ga > $gb) {
-            $teams[$a]['v']++; $teams[$a]['pts'] += 3; $teams[$a]['serie'][] = 'V';
-            $teams[$b]['d']++;                          $teams[$b]['serie'][] = 'D';
+            $teams[$a]['v']++; $teams[$a]['pts'] += 4; $teams[$a]['serie'][] = 'V';
+            $teams[$b]['d']++; $teams[$b]['pts'] += 1; $teams[$b]['serie'][] = 'D';
         } elseif ($ga < $gb) {
-            $teams[$b]['v']++; $teams[$b]['pts'] += 3; $teams[$b]['serie'][] = 'V';
-            $teams[$a]['d']++;                          $teams[$a]['serie'][] = 'D';
+            $teams[$b]['v']++; $teams[$b]['pts'] += 4; $teams[$b]['serie'][] = 'V';
+            $teams[$a]['d']++; $teams[$a]['pts'] += 1; $teams[$a]['serie'][] = 'D';
         } else {
-            $teams[$a]['n']++; $teams[$a]['pts']++;     $teams[$a]['serie'][] = 'N';
-            $teams[$b]['n']++; $teams[$b]['pts']++;     $teams[$b]['serie'][] = 'N';
+            $teams[$a]['n']++; $teams[$a]['pts'] += 2; $teams[$a]['serie'][] = 'N';
+            $teams[$b]['n']++; $teams[$b]['pts'] += 2; $teams[$b]['serie'][] = 'N';
         }
     }
     // Ajouter les équipes sans matchs joués
@@ -317,7 +304,7 @@ function simulateImpact(array $matches, string $equipe, array $standings): ?arra
     $isA = str_contains(mb_strtolower($next['equipe_a']), $q);
     $adv = $isA ? $next['equipe_b'] : $next['equipe_a'];
     $results = [];
-    foreach (['win'=>[3,0], 'nul'=>[1,1], 'loss'=>[0,3]] as $sc => [$pMe,$pThem]) {
+    foreach (['win'=>[4,1], 'nul'=>[2,2], 'loss'=>[1,4]] as $sc => [$pMe,$pThem]) {
         $fake           = $next;
         $fake['joue']   = true;
         $fake['buts_a'] = $isA ? $pMe   : $pThem;
@@ -359,7 +346,7 @@ function teamStats(array $matches, string $equipe): array {
         else                { $s['d']++; $s['serie'][] = 'D'; }
     }
     $s['ga']    = $s['bp'] - $s['bc'];
-    $s['pts']   = $s['v']*3 + $s['n'];
+    $s['pts']   = $s['v']*4 + $s['n']*2 + $s['d']*1;
     $s['serie'] = array_slice($s['serie'], -5);
     return $s;
 }
@@ -415,71 +402,28 @@ function journeeLieu(string $journee): string {
     return $JOURNEES[$journee]['lieu'] ?? '';
 }
 
-// ── IDs équipes ────────────────────────────────────────────────────
-function getTeamIds(): array {
-    global $sourceUrl, $cacheFile;
-    $idsCacheFile = str_replace('matches_', 'team_ids_', $cacheFile);
-    if (file_exists($idsCacheFile) && (time() - filemtime($idsCacheFile)) < 1800) {
-        $data = json_decode(file_get_contents($idsCacheFile), true);
-        if (is_array($data) && count($data) > 0) return $data;
+// ── Série de victoires ────────────────────────────────────────────
+function winStreak(array $matches, string $equipe): int {
+    $q      = mb_strtolower($equipe);
+    $played = array_values(array_filter($matches, fn($m) => $m['joue'] && (
+        str_contains(mb_strtolower($m['equipe_a']), $q) ||
+        str_contains(mb_strtolower($m['equipe_b']), $q)
+    )));
+    usort($played, fn($a,$b) => matchTs($a) <=> matchTs($b));
+    $streak = 0;
+    for ($i = count($played)-1; $i >= 0; $i--) {
+        $m   = $played[$i];
+        $isA = str_contains(mb_strtolower($m['equipe_a']), $q);
+        $res = $isA ? $m['resultat_a'] : $m['resultat_b'];
+        if ($res === 'D') break;
+        if ($res === 'V') $streak++;
     }
-    $html = curlGet($sourceUrl);
-    if (!$html) return [];
-    $teams = [];
-    if (preg_match_all('/data-filter="([^"]+)"[^>]*>.*?kpequipes\.php\?Equipe=(\d+)&(?:amp;)?Compet=([^&"]+)/s', $html, $m)) {
-        for ($i = 0; $i < count($m[0]); $i++) {
-            $name = cleanName($m[1][$i]);
-            if ($name && $m[2][$i] && !isset($teams[$name])) {
-                $teams[$name] = ['id' => $m[2][$i], 'compet' => $m[3][$i]];
-            }
-        }
-    }
-    if ($teams) {
-        if (!is_dir(dirname($idsCacheFile))) mkdir(dirname($idsCacheFile), 0775, true);
-        file_put_contents($idsCacheFile, json_encode($teams, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
-    }
-    return $teams;
-}
-
-// ── Buteurs ────────────────────────────────────────────────────────
-function getScorers(): array {
-    global $cacheFile;
-    $scorersCacheFile = str_replace('matches_', 'scorers_', $cacheFile);
-    if (file_exists($scorersCacheFile) && (time() - filemtime($scorersCacheFile)) < 1800) {
-        $data = json_decode(file_get_contents($scorersCacheFile), true);
-        if (is_array($data)) return $data;
-    }
-    $teamIds = getTeamIds();
-    if (!$teamIds) return [];
-    $all = [];
-    foreach ($teamIds as $teamName => $info) {
-        $url  = 'https://www.kayak-polo.info/kpequipes.php?Equipe='.$info['id'].'&Compet='.$info['compet'].'&Css=';
-        $html = curlGet($url);
-        if (!$html) continue;
-        if (!preg_match('/id=[\'"]tableStats[\'"][^>]*>(.*?)<\/table>/s', $html, $tm)) continue;
-        preg_match_all('/<tr[^>]*>(.*?)<\/tr>/s', $tm[1], $rows);
-        foreach ($rows[1] as $row) {
-            preg_match_all('/<td[^>]*>(.*?)<\/td>/s', $row, $cm);
-            $cells = array_map(fn($c) => trim(preg_replace('/\s+/', ' ', strip_tags($c))), $cm[1]);
-            if (count($cells) < 3) continue;
-            $nom  = $cells[1] ?? '';
-            $buts = (int)($cells[2] ?? 0);
-            if (!$nom || $nom === 'Nom' || str_contains(mb_strtolower($nom), 'non disponible')) continue;
-            $nom = preg_replace('/\s+C\s*$/', '', trim($nom));
-            $all[] = ['equipe' => $teamName, 'dossard' => $cells[0], 'nom' => $nom, 'buts' => $buts];
-        }
-    }
-    usort($all, fn($a,$b) => $b['buts'] <=> $a['buts']);
-    foreach ($all as $i => &$s) $s['rang'] = $i + 1;
-    if (!is_dir(dirname($scorersCacheFile))) mkdir(dirname($scorersCacheFile), 0775, true);
-    file_put_contents($scorersCacheFile, json_encode($all, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
-    return $all;
+    return $streak;
 }
 
 // ── Données ────────────────────────────────────────────────────────
 logVisit($selectedCompet ?? '', $selectedTeam ?? '');
 $matches     = getMatches();
-$allScorers  = ($selectedTeam && $selectedCompet) ? getScorers() : [];
 $allTeams    = getAllTeams($matches);
 $standings   = buildStandings($matches);
 $nextGlobal  = findNextMatch($matches);
@@ -513,6 +457,14 @@ if ($selectedTeam && $standings) {
         if (str_contains(mb_strtolower($t['equipe']), $q)) { $myTeamName = $t['equipe']; break; }
     }
 }
+
+$streaks  = [];
+foreach ($allTeams as $team) {
+    $s = winStreak($matches, $team);
+    if ($s > 0) $streaks[$team] = $s;
+}
+$maxStreak = $streaks ? max($streaks) : 0;
+$hotTeams  = ($maxStreak >= 1) ? array_keys(array_filter($streaks, fn($s) => $s === $maxStreak)) : [];
 ?><!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -886,6 +838,17 @@ body {
   margin-bottom: 14px;
 }
 .notice strong { color: var(--text); }
+.cal-day-sep {
+  font-size: .75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--text3);
+  padding: 10px 4px 6px;
+  border-top: 1px solid var(--border);
+  margin-top: 8px;
+}
+.cal-day-sep:first-child { border-top: none; margin-top: 0; padding-top: 0; }
 .cal-journee { margin-bottom: 24px; }
 .cal-journee-header {
   display: flex;
@@ -950,42 +913,34 @@ body {
 .cal-score.loss { color: var(--red); }
 .cal-score.draw { color: var(--orange); }
 .cal-score-pending { font-size: .78rem; color: var(--text3); font-weight: 500; }
-.scorers-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: .84rem;
+.fire-card {
+  border: 1.5px solid #f97316;
+  background: rgba(249,115,22,.04);
 }
-.scorers-table th {
-  text-align: left;
-  color: var(--text3);
-  font-weight: 600;
+.fire-label {
   font-size: .72rem;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: .04em;
-  padding: 6px 8px 10px;
-  border-bottom: 1px solid var(--border);
+  letter-spacing: .06em;
+  color: #f97316;
+  margin-bottom: 10px;
 }
-.scorers-table th:first-child { text-align: center; width: 36px; }
-.scorers-table th:last-child  { text-align: right; }
-.scorers-table td {
-  padding: 10px 8px;
-  border-bottom: 1px solid var(--border);
-  vertical-align: middle;
+.fire-team {
+  font-size: .95rem;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 2px;
 }
-.scorers-table td:first-child { text-align: center; color: var(--text3); font-weight: 600; font-size:.8rem; }
-.scorers-table td:last-child  { text-align: right; font-weight: 700; font-size: .95rem; }
-.scorers-table tr:last-child td { border-bottom: none; }
-.scorers-table tr.my-scorer td { background: rgba(0,113,227,.06); }
-.scorers-table tr.my-scorer td:nth-child(2) { color: var(--accent); font-weight: 700; }
-.scorer-team { font-size: .75rem; color: var(--text3); margin-top: 1px; }
-.buts-bar {
-  display: inline-block;
-  height: 6px;
-  background: var(--accent);
-  border-radius: 3px;
-  margin-right: 8px;
-  vertical-align: middle;
-  opacity: .25;
+.fire-sub {
+  font-size: .82rem;
+  color: var(--text2);
+}
+.fire-streak {
+  font-size: 2rem;
+  font-weight: 800;
+  letter-spacing: -.04em;
+  color: #f97316;
+  line-height: 1;
 }
 footer {
   text-align: center;
@@ -1109,7 +1064,6 @@ footer a { color: var(--text3); text-decoration: underline; }
     <button class="tab-btn active" onclick="switchTab('infos',this)">Infos</button>
     <button class="tab-btn"       onclick="switchTab('stats',this)">Stats</button>
     <button class="tab-btn"       onclick="switchTab('calendrier',this)">Calendrier</button>
-    <button class="tab-btn"       onclick="switchTab('buteurs',this)">Buteurs</button>
   </div>
 </div>
 
@@ -1348,8 +1302,7 @@ footer a { color: var(--text3); text-decoration: underline; }
     </div>
     <?php endif; ?>
 
-    <?php $totalButs = array_sum(array_map(fn($m) => $m['buts_a']+$m['buts_b'], iterator_to_array((function() use($jouesOnly){ foreach($jouesOnly as $m) yield $m; })(), false))); ?>
-    <div class="section-title">Championnat de France U18 2026</div>
+    <div class="section-title">Championnat de France <?= $selectedCompet === 'N15' ? 'U15' : 'U18' ?> 2026</div>
     <div class="card">
       <div class="stat-grid">
         <div class="stat-box"><div class="stat-box-val"><?= $totalJoues ?></div><div class="stat-box-lbl">Joués</div></div>
@@ -1360,12 +1313,28 @@ footer a { color: var(--text3); text-decoration: underline; }
     </div>
 
     <div class="notice">
-      <strong>Ce site couvre actuellement uniquement le Championnat de France U18 2026.</strong><br>
-      D'autres compétitions (U15, seniors, championnats régionaux...) seront ajoutées prochainement. Les données sont mises à jour toutes les 5 minutes depuis kayak-polo.info.
+      <strong>Championnat de France <?= $selectedCompet === 'N15' ? 'U15' : 'U18' ?> 2026.</strong><br>
+      Les données sont mises à jour toutes les 5 minutes depuis kayak-polo.info.
     </div>
     <div style="text-align:right;margin-top:4px">
       <a href="?clear_cache=1" style="font-size:.75rem;color:var(--text3);text-decoration:none">Actualiser les données</a>
     </div>
+
+    <?php if ($hotTeams): ?>
+    <div class="section-title">🔥 En feu</div>
+    <div class="card fire-card">
+      <div class="fire-label">🔥 Série en cours — <?= $maxStreak ?> victoire<?= $maxStreak > 1 ? 's' : '' ?> sans défaite</div>
+      <?php foreach ($hotTeams as $i => $team): ?>
+      <div style="display:flex;align-items:center;justify-content:space-between;<?= $i > 0 ? 'margin-top:12px;padding-top:12px;border-top:1px solid rgba(249,115,22,.2)' : '' ?>">
+        <div>
+          <div class="fire-team"><?= h($team) ?></div>
+          <div class="fire-sub"><?= $maxStreak ?> victoire<?= $maxStreak > 1 ? 's' : '' ?> consécutive<?= $maxStreak > 1 ? 's' : '' ?></div>
+        </div>
+        <div class="fire-streak"><?= $maxStreak ?>V</div>
+      </div>
+      <?php endforeach; ?>
+    </div>
+    <?php endif; ?>
 
   </div>
 
@@ -1397,7 +1366,14 @@ footer a { color: var(--text3); text-decoration: underline; }
         </div>
         <div class="cal-journee-badge"><?= $jouesCount ?>/<?= count($jMatches) ?></div>
       </div>
+      <?php $currentDay = null; ?>
       <?php foreach ($jMatches as $m): ?>
+      <?php
+        if ($m['date'] && $m['date'] !== $currentDay) {
+            $currentDay = $m['date'];
+            echo '<div class="cal-day-sep">'.h(fmtDate($m['date'])).'</div>';
+        }
+      ?>
       <?php
         $isMine = $q && (
             str_contains(mb_strtolower($m['equipe_a']), $q) ||
@@ -1442,70 +1418,6 @@ footer a { color: var(--text3); text-decoration: underline; }
     <?php endif; ?>
   </div>
 
-  <div id="tab-buteurs" class="tab-panel">
-    <?php
-      $maxButs = $allScorers ? $allScorers[0]['buts'] : 1;
-      $q = mb_strtolower($selectedTeam ?? '');
-      $myScorers = $q ? array_values(array_filter($allScorers, fn($s) => str_contains(mb_strtolower($s['equipe']), $q))) : [];
-    ?>
-
-    <?php if ($myScorers): ?>
-    <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
-        <div class="card-label">Buteurs — <?= h($myTeamName) ?></div>
-      </div>
-      <table class="scorers-table">
-        <thead><tr>
-          <th>#</th><th>Joueur</th><th style="text-align:right">Buts</th>
-        </tr></thead>
-        <tbody>
-          <?php foreach ($myScorers as $i => $s): ?>
-          <tr class="my-scorer">
-            <td><?= $i + 1 ?></td>
-            <td><?= h($s['nom']) ?></td>
-            <td>
-              <span class="buts-bar" style="width:<?= min(60, $s['buts'] / max(1,$myScorers[0]['buts']) * 60) ?>px"></span>
-              <?= $s['buts'] ?>
-            </td>
-          </tr>
-          <?php endforeach; ?>
-        </tbody>
-      </table>
-    </div>
-    <?php endif; ?>
-
-    <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
-        <div class="card-label">Classement général des buteurs</div>
-      </div>
-      <?php if ($allScorers): ?>
-      <table class="scorers-table">
-        <thead><tr>
-          <th>#</th><th>Joueur</th><th style="text-align:right">Buts</th>
-        </tr></thead>
-        <tbody>
-          <?php foreach ($allScorers as $s):
-            $isMe = $q && str_contains(mb_strtolower($s['equipe']), $q);
-          ?>
-          <tr<?= $isMe ? ' class="my-scorer"' : '' ?>>
-            <td><?= $s['rang'] ?></td>
-            <td>
-              <?= h($s['nom']) ?>
-              <div class="scorer-team"><?= h($s['equipe']) ?></div>
-            </td>
-            <td>
-              <span class="buts-bar" style="width:<?= min(60, $s['buts'] / $maxButs * 60) ?>px"></span>
-              <?= $s['buts'] ?>
-            </td>
-          </tr>
-          <?php endforeach; ?>
-        </tbody>
-      </table>
-      <?php else: ?>
-      <p class="no-data">Aucune donnée de buteurs disponible pour le moment.</p>
-      <?php endif; ?>
-    </div>
-  </div>
 
 </div>
 <?php endif; ?>
