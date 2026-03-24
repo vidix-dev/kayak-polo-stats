@@ -835,6 +835,33 @@ footer {
 }
 footer a { color: var(--text3); text-decoration: underline; }
 .muted { color: var(--text3); }
+#loader-overlay {
+  position: fixed;
+  inset: 0;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  transition: opacity .4s ease;
+}
+#loader-overlay.fade-out { opacity: 0; pointer-events: none; }
+.loader-spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+  margin-bottom: 16px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.loader-label {
+  font-size: .82rem;
+  color: var(--text2);
+  font-weight: 500;
+}
 .mt8  { margin-top: 8px; }
 .mt12 { margin-top: 12px; }
 @media (max-width: 480px) {
@@ -847,6 +874,11 @@ footer a { color: var(--text3); text-decoration: underline; }
 </style>
 </head>
 <body>
+<div id="loader-overlay">
+  <img src="/kps.png" alt="KPS" style="width:60px;height:60px;border-radius:14px;margin-bottom:20px;box-shadow:0 4px 16px rgba(58,80,178,.2)">
+  <div class="loader-spinner"></div>
+  <div class="loader-label">Chargement...</div>
+</div>
 
 <?php if (!$selectedCompet): ?>
 <div class="selector-screen">
@@ -908,8 +940,7 @@ footer a { color: var(--text3); text-decoration: underline; }
     <span class="topbar-team">
       <span style="color:var(--text3);font-size:.75rem"><?= $selectedCompet === 'N15' ? 'U15' : 'U18' ?></span>
       <?= h($myTeamName) ?>
-      <a href="?clear_team=1">Changer</a>
-      <a href="?clear_compet=1">Compétition</a>
+      <a href="?clear_compet=1">Changer</a>
     </span>
   </div>
 </div>
@@ -1265,6 +1296,14 @@ function switchTab(id, btn) {
   document.getElementById('tab-' + id).classList.add('active');
   btn.classList.add('active');
 }
+(function() {
+  var delay = 1000 + Math.random() * 1000;
+  var overlay = document.getElementById('loader-overlay');
+  setTimeout(function() {
+    overlay.classList.add('fade-out');
+    setTimeout(function() { overlay.style.display = 'none'; }, 400);
+  }, delay);
+})();
 </script>
 </body>
 </html>
