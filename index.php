@@ -109,6 +109,21 @@ if (isset($_GET['clear_cache'])) {
     exit;
 }
 
+// ── Helpers HTTP ───────────────────────────────────────────────────
+function curlGet(string $url): string {
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_USERAGENT      => 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        CURLOPT_TIMEOUT        => 15,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_SSL_VERIFYPEER => true,
+    ]);
+    $html = curl_exec($ch);
+    curl_close($ch);
+    return $html ?: '';
+}
+
 // ── Scraping + Cache ───────────────────────────────────────────────
 function getMatches(): array {
     global $sourceUrl, $cacheFile;
@@ -119,7 +134,7 @@ function getMatches(): array {
     $ch = curl_init($sourceUrl);
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_USERAGENT      => 'Mozilla/5.0 (compatible; KayakPoloStats/1.0)',
+        CURLOPT_USERAGENT      => 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         CURLOPT_TIMEOUT        => 15,
         CURLOPT_FOLLOWLOCATION => true,
         CURLOPT_SSL_VERIFYPEER => true,
@@ -400,9 +415,71 @@ function journeeLieu(string $journee): string {
     return $JOURNEES[$journee]['lieu'] ?? '';
 }
 
+// ── IDs équipes ────────────────────────────────────────────────────
+function getTeamIds(): array {
+    global $sourceUrl, $cacheFile;
+    $idsCacheFile = str_replace('matches_', 'team_ids_', $cacheFile);
+    if (file_exists($idsCacheFile) && (time() - filemtime($idsCacheFile)) < 1800) {
+        $data = json_decode(file_get_contents($idsCacheFile), true);
+        if (is_array($data) && count($data) > 0) return $data;
+    }
+    $html = curlGet($sourceUrl);
+    if (!$html) return [];
+    $teams = [];
+    if (preg_match_all('/data-filter="([^"]+)"[^>]*>.*?kpequipes\.php\?Equipe=(\d+)&(?:amp;)?Compet=([^&"]+)/s', $html, $m)) {
+        for ($i = 0; $i < count($m[0]); $i++) {
+            $name = cleanName($m[1][$i]);
+            if ($name && $m[2][$i] && !isset($teams[$name])) {
+                $teams[$name] = ['id' => $m[2][$i], 'compet' => $m[3][$i]];
+            }
+        }
+    }
+    if ($teams) {
+        if (!is_dir(dirname($idsCacheFile))) mkdir(dirname($idsCacheFile), 0775, true);
+        file_put_contents($idsCacheFile, json_encode($teams, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+    }
+    return $teams;
+}
+
+// ── Buteurs ────────────────────────────────────────────────────────
+function getScorers(): array {
+    global $cacheFile;
+    $scorersCacheFile = str_replace('matches_', 'scorers_', $cacheFile);
+    if (file_exists($scorersCacheFile) && (time() - filemtime($scorersCacheFile)) < 1800) {
+        $data = json_decode(file_get_contents($scorersCacheFile), true);
+        if (is_array($data)) return $data;
+    }
+    $teamIds = getTeamIds();
+    if (!$teamIds) return [];
+    $all = [];
+    foreach ($teamIds as $teamName => $info) {
+        $url  = 'https://www.kayak-polo.info/kpequipes.php?Equipe='.$info['id'].'&Compet='.$info['compet'].'&Css=';
+        $html = curlGet($url);
+        if (!$html) continue;
+        if (!preg_match('/id=[\'"]tableStats[\'"][^>]*>(.*?)<\/table>/s', $html, $tm)) continue;
+        preg_match_all('/<tr[^>]*>(.*?)<\/tr>/s', $tm[1], $rows);
+        foreach ($rows[1] as $row) {
+            preg_match_all('/<td[^>]*>(.*?)<\/td>/s', $row, $cm);
+            $cells = array_map(fn($c) => trim(preg_replace('/\s+/', ' ', strip_tags($c))), $cm[1]);
+            if (count($cells) < 3) continue;
+            $nom  = $cells[1] ?? '';
+            $buts = (int)($cells[2] ?? 0);
+            if (!$nom || $nom === 'Nom' || str_contains(mb_strtolower($nom), 'non disponible')) continue;
+            $nom = preg_replace('/\s+C\s*$/', '', trim($nom));
+            $all[] = ['equipe' => $teamName, 'dossard' => $cells[0], 'nom' => $nom, 'buts' => $buts];
+        }
+    }
+    usort($all, fn($a,$b) => $b['buts'] <=> $a['buts']);
+    foreach ($all as $i => &$s) $s['rang'] = $i + 1;
+    if (!is_dir(dirname($scorersCacheFile))) mkdir(dirname($scorersCacheFile), 0775, true);
+    file_put_contents($scorersCacheFile, json_encode($all, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+    return $all;
+}
+
 // ── Données ────────────────────────────────────────────────────────
 logVisit($selectedCompet ?? '', $selectedTeam ?? '');
 $matches     = getMatches();
+$allScorers  = ($selectedTeam && $selectedCompet) ? getScorers() : [];
 $allTeams    = getAllTeams($matches);
 $standings   = buildStandings($matches);
 $nextGlobal  = findNextMatch($matches);
@@ -873,6 +950,43 @@ body {
 .cal-score.loss { color: var(--red); }
 .cal-score.draw { color: var(--orange); }
 .cal-score-pending { font-size: .78rem; color: var(--text3); font-weight: 500; }
+.scorers-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: .84rem;
+}
+.scorers-table th {
+  text-align: left;
+  color: var(--text3);
+  font-weight: 600;
+  font-size: .72rem;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  padding: 6px 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.scorers-table th:first-child { text-align: center; width: 36px; }
+.scorers-table th:last-child  { text-align: right; }
+.scorers-table td {
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.scorers-table td:first-child { text-align: center; color: var(--text3); font-weight: 600; font-size:.8rem; }
+.scorers-table td:last-child  { text-align: right; font-weight: 700; font-size: .95rem; }
+.scorers-table tr:last-child td { border-bottom: none; }
+.scorers-table tr.my-scorer td { background: rgba(0,113,227,.06); }
+.scorers-table tr.my-scorer td:nth-child(2) { color: var(--accent); font-weight: 700; }
+.scorer-team { font-size: .75rem; color: var(--text3); margin-top: 1px; }
+.buts-bar {
+  display: inline-block;
+  height: 6px;
+  background: var(--accent);
+  border-radius: 3px;
+  margin-right: 8px;
+  vertical-align: middle;
+  opacity: .25;
+}
 footer {
   text-align: center;
   padding: 32px 20px 24px;
@@ -995,6 +1109,7 @@ footer a { color: var(--text3); text-decoration: underline; }
     <button class="tab-btn active" onclick="switchTab('infos',this)">Infos</button>
     <button class="tab-btn"       onclick="switchTab('stats',this)">Stats</button>
     <button class="tab-btn"       onclick="switchTab('calendrier',this)">Calendrier</button>
+    <button class="tab-btn"       onclick="switchTab('buteurs',this)">Buteurs</button>
   </div>
 </div>
 
@@ -1325,6 +1440,71 @@ footer a { color: var(--text3); text-decoration: underline; }
     <?php if (empty($matchesByJournee)): ?>
     <div class="card"><p class="no-data">Aucun match trouvé.</p></div>
     <?php endif; ?>
+  </div>
+
+  <div id="tab-buteurs" class="tab-panel">
+    <?php
+      $maxButs = $allScorers ? $allScorers[0]['buts'] : 1;
+      $q = mb_strtolower($selectedTeam ?? '');
+      $myScorers = $q ? array_values(array_filter($allScorers, fn($s) => str_contains(mb_strtolower($s['equipe']), $q))) : [];
+    ?>
+
+    <?php if ($myScorers): ?>
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div class="card-label">Buteurs — <?= h($myTeamName) ?></div>
+      </div>
+      <table class="scorers-table">
+        <thead><tr>
+          <th>#</th><th>Joueur</th><th style="text-align:right">Buts</th>
+        </tr></thead>
+        <tbody>
+          <?php foreach ($myScorers as $i => $s): ?>
+          <tr class="my-scorer">
+            <td><?= $i + 1 ?></td>
+            <td><?= h($s['nom']) ?></td>
+            <td>
+              <span class="buts-bar" style="width:<?= min(60, $s['buts'] / max(1,$myScorers[0]['buts']) * 60) ?>px"></span>
+              <?= $s['buts'] ?>
+            </td>
+          </tr>
+          <?php endforeach; ?>
+        </tbody>
+      </table>
+    </div>
+    <?php endif; ?>
+
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div class="card-label">Classement général des buteurs</div>
+      </div>
+      <?php if ($allScorers): ?>
+      <table class="scorers-table">
+        <thead><tr>
+          <th>#</th><th>Joueur</th><th style="text-align:right">Buts</th>
+        </tr></thead>
+        <tbody>
+          <?php foreach ($allScorers as $s):
+            $isMe = $q && str_contains(mb_strtolower($s['equipe']), $q);
+          ?>
+          <tr<?= $isMe ? ' class="my-scorer"' : '' ?>>
+            <td><?= $s['rang'] ?></td>
+            <td>
+              <?= h($s['nom']) ?>
+              <div class="scorer-team"><?= h($s['equipe']) ?></div>
+            </td>
+            <td>
+              <span class="buts-bar" style="width:<?= min(60, $s['buts'] / $maxButs * 60) ?>px"></span>
+              <?= $s['buts'] ?>
+            </td>
+          </tr>
+          <?php endforeach; ?>
+        </tbody>
+      </table>
+      <?php else: ?>
+      <p class="no-data">Aucune donnée de buteurs disponible pour le moment.</p>
+      <?php endif; ?>
+    </div>
   </div>
 
 </div>
