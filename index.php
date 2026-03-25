@@ -582,6 +582,359 @@ if (!$defaultDay) {
     }
 }
 if (!$defaultDay) $defaultDay = end($champDates) ?: $today;
+
+// ── PDF / Page impression ──────────────────────────────────────────
+if (isset($_GET['print_schedule'])) {
+    // Trouver la journée à afficher : celle qui contient $defaultDay, sinon J1
+    $printJournee = null;
+    foreach ($JOURNEES as $jNom => $jInfo) {
+        if (in_array($defaultDay, $jInfo['dates'], true)) { $printJournee = $jNom; break; }
+    }
+    if (!$printJournee) $printJournee = array_key_first($JOURNEES);
+    $printDates  = $JOURNEES[$printJournee]['dates'] ?? [];
+    $printLieu   = $JOURNEES[$printJournee]['lieu']  ?? '';
+    $printCompet = $selectedCompet === 'N15' ? 'U15' : 'U18';
+    $printTeamQ  = $selectedTeam ? mb_strtolower($myTeamName ?: $selectedTeam) : '';
+    // Grouper les matchs par jour pour cette journée
+    $printByDay = [];
+    foreach ($printDates as $d) $printByDay[$d] = [];
+    foreach ($matches as $m) {
+        if (!isset($printByDay[$m['date']])) continue;
+        $printByDay[$m['date']][] = $m;
+    }
+    foreach ($printByDay as &$dayMs) usort($dayMs, fn($a,$b) => matchTs($a)<=>matchTs($b));
+    unset($dayMs);
+    // Dates formatées pour le header
+    $printDatesStr = implode(' & ', array_map(fn($d) => fmtDate($d), $printDates));
+    ?><!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Programme <?= h($printJournee) ?> — Kayak Polo <?= h($printCompet) ?> 2026</title>
+<style>
+@page { size: A4 portrait; margin: 12mm 14mm; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  background: #fff;
+  color: #111;
+  font-size: 10pt;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+/* ── Header ── */
+.page-header {
+  background: #0f172a;
+  color: #fff;
+  padding: 18px 20px 16px;
+  border-radius: 10px;
+  margin-bottom: 18px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+.header-logo {
+  width: 44px; height: 44px;
+  background: #0071e3;
+  border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 20px; flex-shrink: 0;
+  font-weight: 800; color: #fff; letter-spacing: -1px;
+}
+.header-main { flex: 1; }
+.header-title {
+  font-size: 16pt;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+}
+.header-sub {
+  margin-top: 4px;
+  font-size: 9pt;
+  color: #94a3b8;
+  letter-spacing: 0.02em;
+}
+.header-meta {
+  text-align: right;
+  font-size: 8.5pt;
+  color: #64748b;
+  line-height: 1.6;
+}
+.header-meta strong { color: #e2e8f0; font-weight: 600; }
+/* ── Day section ── */
+.day-block { margin-bottom: 20px; }
+.day-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 2px solid #0071e3;
+}
+.day-name {
+  font-size: 11pt;
+  font-weight: 700;
+  color: #0f172a;
+  letter-spacing: -0.02em;
+}
+.day-count {
+  background: #e8f0fb;
+  color: #0071e3;
+  border-radius: 20px;
+  padding: 1px 9px;
+  font-size: 8pt;
+  font-weight: 600;
+}
+/* ── Match rows ── */
+.match-row {
+  display: grid;
+  grid-template-columns: 52px 28px 1fr auto;
+  gap: 0 10px;
+  align-items: center;
+  padding: 7px 10px;
+  border-radius: 7px;
+  margin-bottom: 4px;
+  background: #f8fafc;
+  border: 1px solid #e8ecf0;
+  page-break-inside: avoid;
+}
+.match-row:nth-child(even) { background: #fff; }
+.match-row.my-match {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+}
+.match-row.arbi-p {
+  background: #f5f3ff;
+  border-color: #ddd6fe;
+}
+.match-row.arbi-s {
+  background: #fdf4ff;
+  border-color: #e9d5ff;
+}
+.match-time {
+  font-size: 10pt;
+  font-weight: 700;
+  color: #374151;
+  white-space: nowrap;
+}
+.match-terrain {
+  font-size: 8pt;
+  color: #6b7280;
+  background: #f1f5f9;
+  border-radius: 4px;
+  padding: 2px 5px;
+  text-align: center;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.match-teams {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.match-vs {
+  font-size: 10pt;
+  font-weight: 500;
+  color: #1e293b;
+  line-height: 1.3;
+}
+.match-vs .team-name { display: inline; }
+.match-vs .team-mine {
+  color: #0071e3;
+  font-weight: 700;
+}
+.match-vs .sep {
+  color: #94a3b8;
+  font-size: 8.5pt;
+  margin: 0 4px;
+}
+.match-arbi {
+  font-size: 7.5pt;
+  color: #94a3b8;
+  margin-top: 2px;
+}
+.match-arbi .arbi-label {
+  font-weight: 600;
+  color: #64748b;
+}
+.match-right {
+  text-align: right;
+  flex-shrink: 0;
+}
+.match-score {
+  font-size: 11pt;
+  font-weight: 800;
+  color: #0f172a;
+  white-space: nowrap;
+}
+.match-score.win  { color: #16a34a; }
+.match-score.loss { color: #dc2626; }
+.match-score.draw { color: #d97706; }
+.match-pending {
+  font-size: 8pt;
+  color: #94a3b8;
+}
+.badge-type {
+  display: inline-block;
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 7pt;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.badge-mine  { background: #0071e3; color: #fff; }
+.badge-arbi-p { background: #7c3aed; color: #fff; }
+.badge-arbi-s { background: #a78bfa; color: #fff; }
+/* ── Footer ── */
+.page-footer {
+  margin-top: 24px;
+  padding-top: 10px;
+  border-top: 1px solid #e2e8f0;
+  display: flex;
+  justify-content: space-between;
+  font-size: 7.5pt;
+  color: #94a3b8;
+}
+.legend {
+  display: flex;
+  gap: 14px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 7.5pt;
+  color: #64748b;
+}
+.legend-dot {
+  width: 10px; height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+@media print {
+  .no-print { display: none !important; }
+}
+@media screen {
+  body { background: #e2e8f0; }
+  .page { background: #fff; max-width: 794px; margin: 20px auto; padding: 20px; border-radius: 8px; box-shadow: 0 4px 24px rgba(0,0,0,.15); }
+  .print-btn {
+    display: block;
+    margin: 0 auto 20px;
+    background: #0071e3;
+    color: #fff;
+    border: none;
+    border-radius: 10px;
+    padding: 12px 32px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    max-width: 794px;
+  }
+  .print-btn:hover { background: #0077ed; }
+}
+</style>
+</head>
+<body>
+<button class="print-btn no-print" onclick="window.print()">Imprimer / Enregistrer en PDF</button>
+<div class="page">
+
+<div class="page-header">
+  <div class="header-logo">KP</div>
+  <div class="header-main">
+    <div class="header-title">Championnat de France <?= h($printCompet) ?> 2026</div>
+    <div class="header-sub">KAYAK POLO STATS &mdash; Programme officieux</div>
+  </div>
+  <div class="header-meta">
+    <strong><?= h($printJournee) ?> &mdash; <?= h($printLieu) ?></strong><br>
+    <?= h($printDatesStr) ?><br>
+    Généré le <?= date('d/m/Y à H:i') ?>
+  </div>
+</div>
+
+<?php if ($printTeamQ): ?>
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:#bfdbfe;border:1px solid #93c5fd"></div> Mon équipe</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#ddd6fe;border:1px solid #c4b5fd"></div> Arbitre principal</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#e9d5ff;border:1px solid #d8b4fe"></div> Arbitre secondaire</div>
+</div>
+<?php endif; ?>
+
+<?php foreach ($printByDay as $d => $dayMatches): ?>
+<?php if (empty($dayMatches)) continue; ?>
+<div class="day-block">
+  <div class="day-header">
+    <span class="day-name"><?= h(fmtDate($d)) ?></span>
+    <span class="day-count"><?= count($dayMatches) ?> match<?= count($dayMatches)>1?'s':'' ?></span>
+  </div>
+  <?php foreach ($dayMatches as $m):
+    $isMyMatch = $printTeamQ && (
+        str_contains(mb_strtolower($m['equipe_a']), $printTeamQ) ||
+        str_contains(mb_strtolower($m['equipe_b']), $printTeamQ)
+    );
+    $isArbiP = $printTeamQ && !$isMyMatch && str_contains(mb_strtolower($m['arbitre_principal']), $printTeamQ);
+    $isArbiS = $printTeamQ && !$isMyMatch && !$isArbiP && str_contains(mb_strtolower($m['arbitre_secondaire']), $printTeamQ);
+    $rowCls  = $isMyMatch ? 'match-row my-match' : ($isArbiP ? 'match-row arbi-p' : ($isArbiS ? 'match-row arbi-s' : 'match-row'));
+    $isA     = $printTeamQ && str_contains(mb_strtolower($m['equipe_a']), $printTeamQ);
+    $gp      = $isA ? $m['buts_a'] : $m['buts_b'];
+    $gc      = $isA ? $m['buts_b'] : $m['buts_a'];
+    $scCls   = '';
+    if ($m['joue'] && $isMyMatch) $scCls = $gp>$gc?'win':($gp<$gc?'loss':'draw');
+  ?>
+  <div class="<?= $rowCls ?>">
+    <div class="match-time"><?= h($m['heure'] ?: '--:--') ?></div>
+    <div class="match-terrain"><?= $m['terrain'] ? 'T'.$m['terrain'] : '—' ?></div>
+    <div class="match-teams">
+      <div class="match-vs">
+        <span class="team-name <?= ($isMyMatch && str_contains(mb_strtolower($m['equipe_a']), $printTeamQ)) ? 'team-mine' : '' ?>"><?= h($m['equipe_a']) ?></span>
+        <span class="sep">vs</span>
+        <span class="team-name <?= ($isMyMatch && str_contains(mb_strtolower($m['equipe_b']), $printTeamQ)) ? 'team-mine' : '' ?>"><?= h($m['equipe_b']) ?></span>
+        <?php if ($isMyMatch): ?>&nbsp;<span class="badge-type badge-mine">Mon match</span><?php endif; ?>
+        <?php if ($isArbiP):  ?>&nbsp;<span class="badge-type badge-arbi-p">Arbi principal</span><?php endif; ?>
+        <?php if ($isArbiS):  ?>&nbsp;<span class="badge-type badge-arbi-s">Arbi secondaire</span><?php endif; ?>
+      </div>
+      <?php if ($m['arbitre_principal'] || $m['arbitre_secondaire']): ?>
+      <div class="match-arbi">
+        <?php if ($m['arbitre_principal']): ?>
+        <span class="arbi-label">P :</span> <?= h($m['arbitre_principal']) ?>
+        <?php endif; ?>
+        <?php if ($m['arbitre_secondaire']): ?>
+        &nbsp;&nbsp;<span class="arbi-label">S :</span> <?= h($m['arbitre_secondaire']) ?>
+        <?php endif; ?>
+      </div>
+      <?php endif; ?>
+    </div>
+    <div class="match-right">
+      <?php if ($m['joue']): ?>
+        <div class="match-score <?= $scCls ?>"><?= h($m['score']) ?></div>
+      <?php else: ?>
+        <div class="match-pending">À jouer</div>
+      <?php endif; ?>
+    </div>
+  </div>
+  <?php endforeach; ?>
+</div>
+<?php endforeach; ?>
+
+<div class="page-footer">
+  <span>kp-stats.duckdns.org — Données extraites de kayak-polo.info</span>
+  <span>Données non-officielles</span>
+</div>
+
+</div>
+<script>
+// Auto-print si on vient d'un clic bouton (pas direct URL)
+if (document.referrer) {
+  // Ne pas auto-print, laisser l'utilisateur cliquer
+}
+</script>
+</body>
+</html>
+<?php exit; }
 ?><!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -1434,6 +1787,13 @@ footer a { color: var(--text3); text-decoration: underline; }
           }
       }
     ?>
+
+    <div style="margin-bottom:14px">
+      <a href="?print_schedule=1" target="_blank" style="display:inline-flex;align-items:center;gap:7px;background:#0f172a;color:#fff;text-decoration:none;border-radius:10px;padding:9px 16px;font-size:.85rem;font-weight:600;letter-spacing:-.01em;">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M6 14h12v8H6z"/></svg>
+        Programme PDF
+      </a>
+    </div>
 
     <div class="day-picker">
       <?php foreach ($champDates as $d):
