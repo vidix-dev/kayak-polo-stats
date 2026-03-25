@@ -111,6 +111,64 @@ if (isset($_GET['clear_cache'])) {
     exit;
 }
 
+// ── Helper HTTP ────────────────────────────────────────────────────
+function curlGet(string $url): string {
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_USERAGENT      => 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        CURLOPT_TIMEOUT        => 10,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_SSL_VERIFYPEER => true,
+    ]);
+    $html = curl_exec($ch);
+    curl_close($ch);
+    return $html ?: '';
+}
+
+// ── Buteurs ────────────────────────────────────────────────────────
+function getScorers(): array {
+    global $sourceUrl, $cacheFile;
+    $scorersFile = str_replace('matches_', 'scorers_', $cacheFile);
+    if (file_exists($scorersFile) && (time() - filemtime($scorersFile)) < 1800) {
+        $data = json_decode(file_get_contents($scorersFile), true);
+        if (is_array($data)) return $data;
+    }
+    $html = curlGet($sourceUrl);
+    if (!$html) return [];
+    $teamIds = [];
+    if (preg_match_all('/kpequipes\.php\?Equipe=(\d+)&(?:amp;)?Compet=([^&"]+)[^"]*"[^>]*title="Palmar/u', $html, $m)) {
+        for ($i = 0; $i < count($m[0]); $i++) {
+            $key = $m[1][$i].'_'.$m[2][$i];
+            if (!isset($teamIds[$key])) $teamIds[$key] = ['id'=>$m[1][$i],'compet'=>$m[2][$i]];
+        }
+    }
+    if (!$teamIds) return [];
+    $all = [];
+    foreach ($teamIds as $info) {
+        $page = curlGet('https://www.kayak-polo.info/kpequipes.php?Equipe='.$info['id'].'&Compet='.$info['compet'].'&Css=');
+        if (!$page) continue;
+        $name = '';
+        if (preg_match('/id="nomEquipe"[^>]*>([^<]+)</', $page, $nm)) $name = cleanName(trim($nm[1]));
+        if (!preg_match('/id=[\'"]tableStats[\'"][^>]*>(.*?)<\/table>/s', $page, $tm)) continue;
+        preg_match_all('/<tr[^>]*>(.*?)<\/tr>/s', $tm[1], $rows);
+        foreach ($rows[1] as $row) {
+            preg_match_all('/<td[^>]*>(.*?)<\/td>/s', $row, $cm);
+            $cells = array_map(fn($c) => trim(preg_replace('/\s+/', ' ', strip_tags($c))), $cm[1]);
+            if (count($cells) < 3) continue;
+            $nom  = preg_replace('/\s+C\s*$/', '', trim($cells[1] ?? ''));
+            $buts = (int)($cells[2] ?? 0);
+            if (!$nom || $nom === 'Nom' || str_contains(mb_strtolower($nom), 'non disponible')) continue;
+            $all[] = ['equipe' => $name ?: $info['id'], 'nom' => $nom, 'buts' => $buts];
+        }
+    }
+    usort($all, fn($a,$b) => $b['buts'] <=> $a['buts']);
+    foreach ($all as $i => &$s) $s['rang'] = $i + 1;
+    if (!is_dir(dirname($scorersFile))) mkdir(dirname($scorersFile), 0775, true);
+    file_put_contents($scorersFile, json_encode($all, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+    return $all;
+}
+
 // ── Scraping + Cache ───────────────────────────────────────────────
 function getMatches(): array {
     global $sourceUrl, $cacheFile;
@@ -432,6 +490,7 @@ $myArbiP     = $selectedTeam ? findNextArbitrage($matches, $selectedTeam, 'princ
 $myArbiS     = $selectedTeam ? findNextArbitrage($matches, $selectedTeam, 'secondaire')  : null;
 $impact      = $selectedTeam ? simulateImpact($matches, $selectedTeam, $standings)  : null;
 $myStats     = $selectedTeam ? teamStats($matches, $selectedTeam)                  : null;
+$allScorers  = getScorers();
 
 $totalMatchs = count($matches);
 $totalJoues  = count(array_filter($matches, fn($m) => $m['joue']));
@@ -465,6 +524,24 @@ foreach ($allTeams as $team) {
 }
 $maxStreak = $streaks ? max($streaks) : 0;
 $hotTeams  = ($maxStreak >= 1) ? array_keys(array_filter($streaks, fn($s) => $s === $maxStreak)) : [];
+
+$champDates = [];
+foreach ($matches as $m) {
+    if ($m['date']) $champDates[$m['date']] = true;
+}
+usort(array_keys($champDates), fn($a,$b) => matchTs(['date'=>$a,'heure'=>'']) <=> matchTs(['date'=>$b,'heure'=>'']));
+$champDates = array_keys($champDates);
+usort($champDates, fn($a,$b) => (DateTime::createFromFormat('d/m/Y',$a)?->getTimestamp()??0) <=> (DateTime::createFromFormat('d/m/Y',$b)?->getTimestamp()??0));
+
+$today      = (new DateTime())->format('d/m/Y');
+$defaultDay = in_array($today, $champDates) ? $today : null;
+if (!$defaultDay) {
+    foreach ($champDates as $d) {
+        $dt = DateTime::createFromFormat('d/m/Y', $d);
+        if ($dt && $dt->getTimestamp() >= strtotime('today')) { $defaultDay = $d; break; }
+    }
+}
+if (!$defaultDay) $defaultDay = end($champDates) ?: $today;
 ?><!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -878,7 +955,8 @@ body {
   box-shadow: var(--shadow);
 }
 .cal-match-mine { border: 1.5px solid var(--accent); }
-.cal-match-arbi { border: 1.5px solid #7c3aed; }
+.cal-match-arbi-p { border: 1.5px solid #7c3aed; }
+.cal-match-arbi-s { border: 1.5px solid #a78bfa; }
 .cal-match-time {
   min-width: 44px;
   text-align: center;
@@ -906,13 +984,53 @@ body {
   margin-left: 4px;
 }
 .cal-tag-mine { background: var(--accent); color: #fff; }
-.cal-tag-arbi { background: #7c3aed; color: #fff; }
+.cal-tag-arbi-p { background: #7c3aed; color: #fff; }
+.cal-tag-arbi-s { background: #a78bfa; color: #fff; }
 .cal-match-score { min-width: 56px; text-align: right; }
 .cal-score { font-weight: 700; font-size: .9rem; }
 .cal-score.win  { color: var(--green); }
 .cal-score.loss { color: var(--red); }
 .cal-score.draw { color: var(--orange); }
 .cal-score-pending { font-size: .78rem; color: var(--text3); font-weight: 500; }
+.day-picker {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+.day-btn {
+  background: var(--bg2);
+  border: 1.5px solid var(--border);
+  border-radius: 20px;
+  padding: 6px 14px;
+  font-size: .82rem;
+  font-weight: 600;
+  color: var(--text2);
+  cursor: pointer;
+  font-family: inherit;
+  transition: all .15s;
+  white-space: nowrap;
+}
+.day-btn:hover { border-color: var(--accent); color: var(--accent); }
+.day-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.day-btn.has-match { border-color: var(--accent); color: var(--accent); }
+.day-btn.has-match.active { background: var(--accent); color: #fff; }
+.day-section { display: none; }
+.day-section.active { display: block; }
+.match-type-badge {
+  display: inline-block;
+  font-size: .68rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 20px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+.badge-joue   { background: #d1fae5; color: #065f46; }
+.badge-arbi-p { background: #ede9fe; color: #5b21b6; }
+.badge-arbi-s { background: #f3e8ff; color: #7c3aed; }
+.badge-avenir { background: var(--bg3); color: var(--text2); }
+.day-empty { color: var(--text3); font-size: .88rem; font-style: italic; padding: 12px 0; }
 .fire-card {
   border: 1.5px solid #f97316;
   background: rgba(249,115,22,.04);
@@ -941,6 +1059,52 @@ body {
   letter-spacing: -.04em;
   color: #f97316;
   line-height: 1;
+}
+/* ── Buteurs ─────────────────────────────────────────────────────── */
+.scorers-section { margin-bottom: 28px; }
+.scorers-title {
+  font-size: .7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--text3);
+  padding: 0 0 10px;
+}
+.scorers-table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+.scorers-table th {
+  text-align: left;
+  padding: 6px 8px;
+  font-size: .72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--text3);
+  border-bottom: 1px solid var(--border);
+}
+.scorers-table th:last-child,
+.scorers-table td:last-child { text-align: right; }
+.scorers-table th:first-child,
+.scorers-table td:first-child { text-align: center; width: 38px; }
+.scorers-table td {
+  padding: 9px 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+.scorers-table tr:last-child td { border-bottom: none; }
+.scorers-table tr.me td { background: rgba(0,113,227,.06); font-weight: 600; }
+.scorer-rank { color: var(--text3); font-size: .82rem; font-weight: 600; }
+.scorer-rank.top3 { color: var(--accent); font-weight: 700; }
+.scorer-buts { font-weight: 700; color: var(--text); }
+.scorer-team { color: var(--text2); font-size: .8rem; }
+.scorer-general-rank {
+  display: inline-block;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1px 7px;
+  font-size: .75rem;
+  color: var(--text2);
+  font-weight: 600;
 }
 footer {
   text-align: center;
@@ -1062,8 +1226,10 @@ footer a { color: var(--text3); text-decoration: underline; }
 <div class="tabs-wrap">
   <div class="tabs">
     <button class="tab-btn active" onclick="switchTab('infos',this)">Infos</button>
+    <button class="tab-btn"       onclick="switchTab('matchs',this)">Matchs</button>
     <button class="tab-btn"       onclick="switchTab('stats',this)">Stats</button>
     <button class="tab-btn"       onclick="switchTab('calendrier',this)">Calendrier</button>
+    <button class="tab-btn"       onclick="switchTab('buteurs',this)">Buteurs</button>
   </div>
 </div>
 
@@ -1211,6 +1377,97 @@ footer a { color: var(--text3); text-decoration: underline; }
     </div>
     <?php endif; ?>
 
+  </div>
+
+  <div id="tab-matchs" class="tab-panel">
+    <?php
+      $myQ = mb_strtolower($selectedTeam ?? '');
+      $matchsByDay = [];
+      foreach ($champDates as $d) $matchsByDay[$d] = [];
+      foreach ($matches as $m) {
+          if (!$m['date']) continue;
+          $isMyMatch = $myQ && (str_contains(mb_strtolower($m['equipe_a']),$myQ) || str_contains(mb_strtolower($m['equipe_b']),$myQ));
+          $isArbiP   = $myQ && str_contains(mb_strtolower($m['arbitre_principal']),$myQ);
+          $isArbiS   = $myQ && !$isArbiP && str_contains(mb_strtolower($m['arbitre_secondaire']),$myQ);
+          if ($isMyMatch || $isArbiP || $isArbiS) {
+              $matchsByDay[$m['date']][] = ['match'=>$m,'type'=>$isMyMatch?'match':($isArbiP?'arbi_p':'arbi_s')];
+          }
+      }
+    ?>
+
+    <div class="day-picker">
+      <?php foreach ($champDates as $d):
+        $hasMatch = !empty($matchsByDay[$d]);
+        $isActive = ($d === $defaultDay);
+        $cls = 'day-btn'.($hasMatch?' has-match':'').($isActive?' active':'');
+        $dt  = DateTime::createFromFormat('d/m/Y', $d);
+        $lbl = $dt ? $dt->format('d/m') : substr($d,0,5);
+      ?>
+      <button class="<?= $cls ?>" onclick="switchDay('<?= h($d) ?>',this)"><?= h($lbl) ?></button>
+      <?php endforeach; ?>
+    </div>
+
+    <?php foreach ($champDates as $d):
+      $isActive = ($d === $defaultDay);
+      $dt = DateTime::createFromFormat('d/m/Y', $d);
+      $dayLabel = $dt ? fmtDate($d) : $d;
+    ?>
+    <div class="day-section<?= $isActive?' active':'' ?>" data-day="<?= h($d) ?>">
+      <div class="section-title" style="margin-top:0"><?= h($dayLabel) ?></div>
+      <?php if (empty($matchsByDay[$d])): ?>
+      <div class="card"><p class="day-empty">Aucun match ni arbitrage ce jour.</p></div>
+      <?php else: ?>
+      <?php
+        $sorted = $matchsByDay[$d];
+        usort($sorted, fn($a,$b) => matchTs($a['match']) <=> matchTs($b['match']));
+      ?>
+      <?php foreach ($sorted as $entry):
+        $m    = $entry['match'];
+        $type = $entry['type'];
+        $isA  = str_contains(mb_strtolower($m['equipe_a']), $myQ);
+        $gp   = $isA ? $m['buts_a'] : $m['buts_b'];
+        $gc   = $isA ? $m['buts_b'] : $m['buts_a'];
+        $scC  = '';
+        if ($m['joue'] && $type==='match') $scC = $gp>$gc?'win':($gp<$gc?'loss':'draw');
+      ?>
+      <div class="card" style="margin-bottom:10px">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
+          <div style="flex:1">
+            <?php if ($type === 'match'): ?>
+              <div style="font-weight:600;font-size:.95rem">
+                <span style="color:var(--accent)"><?= h($myTeamName) ?></span>
+                <span class="vs"> vs </span>
+                <span><?= h($isA ? $m['equipe_b'] : $m['equipe_a']) ?></span>
+              </div>
+              <span class="match-type-badge <?= $m['joue']?'badge-joue':'badge-avenir' ?>"><?= $m['joue']?'Joué':'À jouer' ?></span>
+            <?php elseif ($type === 'arbi_p'): ?>
+              <div style="font-weight:500;font-size:.9rem"><?= h($m['equipe_a']) ?> vs <?= h($m['equipe_b']) ?></div>
+              <span class="match-type-badge badge-arbi-p">Arbitre principal</span>
+            <?php else: ?>
+              <div style="font-weight:500;font-size:.9rem"><?= h($m['equipe_a']) ?> vs <?= h($m['equipe_b']) ?></div>
+              <span class="match-type-badge badge-arbi-s">Arbitre secondaire</span>
+            <?php endif; ?>
+            <div class="card-sub" style="margin-top:6px">
+              <?= $m['heure'] ? h($m['heure']) : '—' ?>
+              <?= $m['terrain'] ? ' · Terrain '.h($m['terrain']) : '' ?>
+              <?= ($m['journee'] && $m['journee']!=='?') ? ' · '.h($m['journee']) : '' ?>
+            </div>
+          </div>
+          <div style="text-align:right;flex-shrink:0">
+            <?php if ($m['joue'] && $type==='match'): ?>
+              <div class="match-score <?= $scC ?>" style="font-size:1.3rem"><?= $gp ?> – <?= $gc ?></div>
+            <?php elseif ($m['joue']): ?>
+              <div style="font-weight:600;font-size:1rem;color:var(--text2)"><?= h($m['score']) ?></div>
+            <?php else: ?>
+              <div style="color:var(--text3);font-size:.88rem">À venir</div>
+            <?php endif; ?>
+          </div>
+        </div>
+      </div>
+      <?php endforeach; ?>
+      <?php endif; ?>
+    </div>
+    <?php endforeach; ?>
   </div>
 
   <div id="tab-stats" class="tab-panel">
@@ -1379,11 +1636,9 @@ footer a { color: var(--text3); text-decoration: underline; }
             str_contains(mb_strtolower($m['equipe_a']), $q) ||
             str_contains(mb_strtolower($m['equipe_b']), $q)
         );
-        $isArbi = $q && !$isMine && (
-            str_contains(mb_strtolower($m['arbitre_principal']), $q) ||
-            str_contains(mb_strtolower($m['arbitre_secondaire']), $q)
-        );
-        $cardClass = 'cal-match'.($isMine?' cal-match-mine':($isArbi?' cal-match-arbi':''));
+        $isArbiP = $q && !$isMine && str_contains(mb_strtolower($m['arbitre_principal']), $q);
+        $isArbiS = $q && !$isMine && !$isArbiP && str_contains(mb_strtolower($m['arbitre_secondaire']), $q);
+        $cardClass = 'cal-match'.($isMine?' cal-match-mine':($isArbiP?' cal-match-arbi-p':($isArbiS?' cal-match-arbi-s':'')));
       ?>
       <div class="<?= $cardClass ?>">
         <div class="cal-match-time">
@@ -1395,7 +1650,8 @@ footer a { color: var(--text3); text-decoration: underline; }
           <span class="cal-vs">vs</span>
           <span class="<?= ($isMine && str_contains(mb_strtolower($m['equipe_b']), $q)) ? 'cal-my-team' : '' ?>"><?= h($m['equipe_b']) ?></span>
           <?php if ($isMine): ?><span class="cal-tag cal-tag-mine">Mon match</span><?php endif; ?>
-          <?php if ($isArbi): ?><span class="cal-tag cal-tag-arbi">Mon arbitrage</span><?php endif; ?>
+          <?php if ($isArbiP): ?><span class="cal-tag cal-tag-arbi-p">Arbitre principal</span><?php endif; ?>
+          <?php if ($isArbiS): ?><span class="cal-tag cal-tag-arbi-s">Arbitre secondaire</span><?php endif; ?>
         </div>
         <div class="cal-match-score">
           <?php if ($m['joue']): ?>
@@ -1406,7 +1662,7 @@ footer a { color: var(--text3); text-decoration: underline; }
           ?>
           <span class="cal-score <?= $scCl ?>"><?= h($m['score']) ?></span>
           <?php else: ?>
-          <span class="cal-score-pending"><?= h($m['date'] ? substr($m['date'],0,5) : '—') ?></span>
+          <span class="cal-score-pending">—</span>
           <?php endif; ?>
         </div>
       </div>
@@ -1415,6 +1671,84 @@ footer a { color: var(--text3); text-decoration: underline; }
     <?php endforeach; ?>
     <?php if (empty($matchesByJournee)): ?>
     <div class="card"><p class="no-data">Aucun match trouvé.</p></div>
+    <?php endif; ?>
+  </div>
+
+  <div id="tab-buteurs" class="tab-panel">
+    <?php
+      $top20 = array_slice($allScorers, 0, 20);
+      $myTeamScorers = [];
+      if ($selectedTeam && $allScorers) {
+          $q2 = mb_strtolower($myTeamName ?: $selectedTeam);
+          foreach ($allScorers as $s) {
+              if (str_contains(mb_strtolower($s['equipe']), $q2)) {
+                  $myTeamScorers[] = $s;
+              }
+          }
+      }
+    ?>
+    <?php if (!$allScorers): ?>
+      <div class="card"><p class="no-data">Données buteurs non disponibles pour l'instant.</p></div>
+    <?php else: ?>
+
+    <?php if ($myTeamScorers): ?>
+    <div class="card scorers-section">
+      <div class="scorers-title">Buteurs — <?= h($myTeamName ?: $selectedTeam) ?></div>
+      <table class="scorers-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Joueur</th>
+            <th>Rang général</th>
+            <th>Buts</th>
+          </tr>
+        </thead>
+        <tbody>
+          <?php foreach ($myTeamScorers as $idx => $s): ?>
+          <tr>
+            <td class="scorer-rank <?= ($idx+1)<=3?'top3':'' ?>"><?= $idx+1 ?></td>
+            <td><?= h($s['nom']) ?></td>
+            <td><span class="scorer-general-rank"><?= $s['rang'] ?>e</span></td>
+            <td class="scorer-buts"><?= $s['buts'] ?></td>
+          </tr>
+          <?php endforeach; ?>
+        </tbody>
+      </table>
+    </div>
+    <?php endif; ?>
+
+    <div class="card scorers-section">
+      <div class="scorers-title">Top 20 — Classement général</div>
+      <?php if (empty($top20)): ?>
+        <p class="no-data">Aucune donnée disponible.</p>
+      <?php else: ?>
+      <table class="scorers-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Joueur</th>
+            <th>Équipe</th>
+            <th>Buts</th>
+          </tr>
+        </thead>
+        <tbody>
+          <?php
+            $myTeamQ = $selectedTeam ? mb_strtolower($myTeamName ?: $selectedTeam) : '';
+          ?>
+          <?php foreach ($top20 as $s): ?>
+          <?php $isMe = $myTeamQ && str_contains(mb_strtolower($s['equipe']), $myTeamQ); ?>
+          <tr <?= $isMe ? 'class="me"' : '' ?>>
+            <td class="scorer-rank <?= $s['rang']<=3?'top3':'' ?>"><?= $s['rang'] ?></td>
+            <td><?= h($s['nom']) ?></td>
+            <td class="scorer-team"><?= h($s['equipe']) ?></td>
+            <td class="scorer-buts"><?= $s['buts'] ?></td>
+          </tr>
+          <?php endforeach; ?>
+        </tbody>
+      </table>
+      <?php endif; ?>
+    </div>
+
     <?php endif; ?>
   </div>
 
@@ -1428,6 +1762,13 @@ footer a { color: var(--text3); text-decoration: underline; }
 </footer>
 
 <script>
+function switchDay(day, btn) {
+  document.querySelectorAll('.day-section').forEach(s => s.classList.remove('active'));
+  btn.closest('.day-picker').querySelectorAll('.day-btn').forEach(b => b.classList.remove('active'));
+  var sec = document.querySelector('.day-section[data-day="' + day + '"]');
+  if (sec) sec.classList.add('active');
+  btn.classList.add('active');
+}
 function switchTab(id, btn) {
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
