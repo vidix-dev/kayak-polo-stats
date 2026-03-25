@@ -1949,7 +1949,7 @@ async function generatePDF() {
       const mn = ['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'][dt2.getMonth()];
       const dayLabel = dn + ' ' + p[0] + ' ' + mn;
       const neededH = 11 + dayMs.length * 16;
-      if (y + neededH > H - 18) { doc.addPage(); y = M; }
+      if (y + neededH > H - 38) { doc.addPage(); y = M; }
 
       // Day header — ligne séparatrice sobre
       dc(navy); doc.setLineWidth(0.5);
@@ -2044,18 +2044,21 @@ async function generatePDF() {
     } catch(e) {}
 
     // ── FOOTER ──
-    const qrS = 22; // taille QR en mm
+    const qrS = 20;
     const qrX = W - M - qrS;
     const qrY = H - M - qrS;
-    if (qrDataUrl) {
-      doc.addImage(qrDataUrl, 'PNG', qrX, qrY - 2, qrS, qrS);
-    }
+    // Ligne de séparation footer (tout en travers)
     dc([218,222,228]); doc.setLineWidth(0.3);
-    doc.line(M, H-14, qrX - 4, H-14);
+    doc.line(M, H - 26, W - M, H - 26);
+    // QR code : coin bas droit, dans la zone footer
+    if (qrDataUrl) {
+      doc.addImage(qrDataUrl, 'PNG', qrX, qrY, qrS, qrS);
+    }
+    // Texte footer : à gauche, dans la zone footer, sans toucher le QR
     fw('normal', 7); tc(t3);
-    doc.text('kp-stats.duckdns.org', M, H-9);
-    doc.text('Made by Vidix', M, H-4);
-    doc.text('Données non-officielles · kayak-polo.info', M, H-14+5.5);
+    doc.text('kp-stats.duckdns.org', M, H - 20);
+    doc.text('Made by Vidix', M, H - 14);
+    doc.text('Données non-officielles · kayak-polo.info', M, H - 8);
 
     // Save
     const slug = d.team.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9]+/g,'-').toLowerCase();
