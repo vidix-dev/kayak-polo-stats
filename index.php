@@ -1867,7 +1867,7 @@ footer a { color: var(--text3); text-decoration: underline; }
 </footer>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
 <script>
 window._pdfData = <?= json_encode($pdfData, JSON_UNESCAPED_UNICODE) ?>;
 
@@ -1897,13 +1897,25 @@ async function generatePDF() {
     let logoB64=null;
     try { const r=await fetch('/kps.png'); const b=await r.blob(); logoB64=await new Promise(res=>{const fr=new FileReader();fr.onload=()=>res(fr.result);fr.readAsDataURL(b);}); } catch(e){}
 
-    // QR code propre via qrcode lib
+    // QR code via qrcode-generator (dessin manuel canvas, 100% fiable)
     let qrB64=null;
     try {
-      const canvas=document.createElement('canvas');
-      await QRCode.toCanvas(canvas,'https://kp-stats.duckdns.org',{width:300,margin:2,color:{dark:'#0f172a',light:'#ffffff'}});
-      qrB64=canvas.toDataURL('image/png');
-    } catch(e){}
+      const qr=qrcode(0,'M');
+      qr.addData('https://kp-stats.duckdns.org');
+      qr.make();
+      const modules=qr.getModuleCount();
+      const scale=8;
+      const pad=scale*2;
+      const sz=modules*scale+pad*2;
+      const cv=document.createElement('canvas');
+      cv.width=cv.height=sz;
+      const ctx=cv.getContext('2d');
+      ctx.fillStyle='#ffffff'; ctx.fillRect(0,0,sz,sz);
+      ctx.fillStyle='#0f172a';
+      for(let r=0;r<modules;r++) for(let c=0;c<modules;c++)
+        if(qr.isDark(r,c)) ctx.fillRect(pad+c*scale,pad+r*scale,scale,scale);
+      qrB64=cv.toDataURL('image/png');
+    } catch(e){ console.error('QR error',e); }
 
     // ── HEADER compact (18mm) ──
     const hH=18;
