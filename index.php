@@ -130,7 +130,7 @@ function curlGet(string $url): string {
 function getScorers(): array {
     global $sourceUrl, $cacheFile;
     $scorersFile = str_replace('matches_', 'scorers_', $cacheFile);
-    if (file_exists($scorersFile) && (time() - filemtime($scorersFile)) < 1800) {
+    if (file_exists($scorersFile) && (time() - filemtime($scorersFile)) < 1500) {
         $data = json_decode(file_get_contents($scorersFile), true);
         if (is_array($data)) return $data;
     }
