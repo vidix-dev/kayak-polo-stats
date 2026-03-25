@@ -132,7 +132,7 @@ function getScorers(): array {
     $scorersFile = str_replace('matches_', 'scorers_', $cacheFile);
     if (file_exists($scorersFile) && (time() - filemtime($scorersFile)) < 1500) {
         $data = json_decode(file_get_contents($scorersFile), true);
-        if (is_array($data)) return $data;
+        if (is_array($data) && count($data) > 0) return $data;
     }
     $html = curlGet($sourceUrl);
     if (!$html) return [];
