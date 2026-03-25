@@ -300,10 +300,50 @@ function buildStandings(array $matches): array {
         $t['ga']    = $t['bp'] - $t['bc'];
         $t['serie'] = array_slice($t['serie'], -5);
     }
+    unset($t);
     $s = array_values($teams);
-    usort($s, fn($a,$b) => $b['pts']<=>$a['pts'] ?: $b['ga']<=>$a['ga'] ?: $b['bp']<=>$a['bp']);
-    foreach ($s as $i => &$t) $t['rang'] = $i + 1;
-    return $s;
+    // Tri primaire par points
+    usort($s, fn($a,$b) => $b['pts'] <=> $a['pts']);
+    // Départage officiel FFCK par groupes à égalité de points
+    $result = [];
+    $i = 0;
+    while ($i < count($s)) {
+        $j = $i;
+        while ($j < count($s) && $s[$j]['pts'] === $s[$i]['pts']) $j++;
+        $group = array_slice($s, $i, $j - $i);
+        if (count($group) > 1) {
+            $groupNames = array_column($group, 'equipe');
+            // Calcul des stats head-to-head entre les équipes du groupe
+            $h2h = array_fill_keys($groupNames, ['pts'=>0,'bp'=>0,'bc'=>0]);
+            foreach ($matches as $m) {
+                if (!$m['joue']) continue;
+                $a = $m['equipe_a']; $b = $m['equipe_b'];
+                if (!in_array($a,$groupNames,true) || !in_array($b,$groupNames,true)) continue;
+                $ga = $m['buts_a']; $gb = $m['buts_b'];
+                $h2h[$a]['bp'] += $ga; $h2h[$a]['bc'] += $gb;
+                $h2h[$b]['bp'] += $gb; $h2h[$b]['bc'] += $ga;
+                if ($ga > $gb)      { $h2h[$a]['pts'] += 4; $h2h[$b]['pts'] += 1; }
+                elseif ($ga < $gb)  { $h2h[$b]['pts'] += 4; $h2h[$a]['pts'] += 1; }
+                else                { $h2h[$a]['pts'] += 2; $h2h[$b]['pts'] += 2; }
+            }
+            usort($group, function($a, $b) use ($h2h) {
+                $aH = $h2h[$a['equipe']]; $bH = $h2h[$b['equipe']];
+                // 1. Points entre les équipes concernées
+                if ($aH['pts'] !== $bH['pts']) return $bH['pts'] <=> $aH['pts'];
+                // 2. Différence de buts entre elles
+                $aHGa = $aH['bp'] - $aH['bc']; $bHGa = $bH['bp'] - $bH['bc'];
+                if ($aHGa !== $bHGa) return $bHGa <=> $aHGa;
+                // 3. Différence générale de buts
+                if ($a['ga'] !== $b['ga']) return $b['ga'] <=> $a['ga'];
+                // 4. Buts marqués
+                return $b['bp'] <=> $a['bp'];
+            });
+        }
+        foreach ($group as $t) $result[] = $t;
+        $i = $j;
+    }
+    foreach ($result as $i => &$t) $t['rang'] = $i + 1;
+    return $result;
 }
 
 function getAllTeams(array $matches): array {
