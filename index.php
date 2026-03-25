@@ -1867,6 +1867,7 @@ footer a { color: var(--text3); text-decoration: underline; }
 </footer>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 window._pdfData = <?= json_encode($pdfData, JSON_UNESCAPED_UNICODE) ?>;
 
@@ -2027,13 +2028,34 @@ async function generatePDF() {
       y += 20;
     }
 
+    // ── QR CODE ──
+    let qrDataUrl = null;
+    try {
+      const qrDiv = document.createElement('div');
+      qrDiv.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:120px;height:120px;background:#fff';
+      document.body.appendChild(qrDiv);
+      await new Promise(resolve => {
+        new QRCode(qrDiv, { text: 'https://kp-stats.duckdns.org', width: 120, height: 120, colorDark: '#0f172a', colorLight: '#ffffff', correctLevel: QRCode.CorrectLevel.M });
+        setTimeout(resolve, 150);
+      });
+      const qrCanvas = qrDiv.querySelector('canvas');
+      if (qrCanvas) qrDataUrl = qrCanvas.toDataURL('image/png');
+      document.body.removeChild(qrDiv);
+    } catch(e) {}
+
     // ── FOOTER ──
-    dc([226,232,240]); doc.setLineWidth(0.3);
-    doc.line(M, H-13, W-M, H-13);
+    const qrS = 22; // taille QR en mm
+    const qrX = W - M - qrS;
+    const qrY = H - M - qrS;
+    if (qrDataUrl) {
+      doc.addImage(qrDataUrl, 'PNG', qrX, qrY - 2, qrS, qrS);
+    }
+    dc([218,222,228]); doc.setLineWidth(0.3);
+    doc.line(M, H-14, qrX - 4, H-14);
     fw('normal', 7); tc(t3);
-    doc.text('kp-stats.duckdns.org', M, H-8);
-    doc.text('Made by Vidix', W/2, H-8, {align:'center'});
-    doc.text('Données non-officielles · kayak-polo.info', W-M, H-8, {align:'right'});
+    doc.text('kp-stats.duckdns.org', M, H-9);
+    doc.text('Made by Vidix', M, H-4);
+    doc.text('Données non-officielles · kayak-polo.info', M, H-14+5.5);
 
     // Save
     const slug = d.team.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9]+/g,'-').toLowerCase();
