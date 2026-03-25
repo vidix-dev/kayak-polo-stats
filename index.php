@@ -1867,7 +1867,7 @@ footer a { color: var(--text3); text-decoration: underline; }
 </footer>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
 <script>
 window._pdfData = <?= json_encode($pdfData, JSON_UNESCAPED_UNICODE) ?>;
 
@@ -1876,202 +1876,136 @@ async function generatePDF() {
   const origHTML = btn.innerHTML;
   btn.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Génération...';
   btn.disabled = true;
-
   try {
     const d = window._pdfData;
     if (!d || !d.team) { alert('Sélectionne une équipe pour générer le programme.'); return; }
 
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF({ unit: 'mm', format: 'a4', compress: true });
-    const W = 210, H = 297, M = 12, CW = 210 - 24;
+    const W=210, H=297, M=12, CW=186;
     let y = M;
 
-    // Colors — palette pro monochrome + accent
-    const navy  = [15, 23, 42];
-    const blue  = [0, 100, 200];
-    const white = [255,255,255];
-    const t1    = [15, 23, 42];
-    const t2    = [71, 85, 105];
-    const t3    = [148, 163, 184];
-    const rowBg = [250, 251, 252];
-    const line  = [218, 222, 228];
-    const green = [34, 139, 60];
-    const red   = [185, 40, 40];
-    const amber = [155, 105, 10];
+    const navy=[15,23,42], blue=[0,100,200], white=[255,255,255];
+    const t1=[15,23,42], t2=[71,85,105], t3=[148,163,184];
+    const rowBg=[250,251,252], lineC=[218,222,228];
+    const green=[34,139,60], red=[185,40,40], amber=[155,105,10];
+    const fc=c=>doc.setFillColor(...c), tc=c=>doc.setTextColor(...c);
+    const dc=c=>doc.setDrawColor(...c);
+    const fw=(f,s)=>{doc.setFont('helvetica',f);doc.setFontSize(s);};
 
-    const fc = c => doc.setFillColor(...c);
-    const tc = c => doc.setTextColor(...c);
-    const dc = c => doc.setDrawColor(...c);
-    const fw = (f,s) => { doc.setFont('helvetica', f); doc.setFontSize(s); };
+    // Logo
+    let logoB64=null;
+    try { const r=await fetch('/kps.png'); const b=await r.blob(); logoB64=await new Promise(res=>{const fr=new FileReader();fr.onload=()=>res(fr.result);fr.readAsDataURL(b);}); } catch(e){}
 
-    // Load logo
-    let logoB64 = null;
+    // QR code propre via qrcode lib
+    let qrB64=null;
     try {
-      const res = await fetch('/kps.png'); const blob = await res.blob();
-      logoB64 = await new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(blob); });
-    } catch(e) {}
+      const canvas=document.createElement('canvas');
+      await QRCode.toCanvas(canvas,'https://kp-stats.duckdns.org',{width:300,margin:2,color:{dark:'#0f172a',light:'#ffffff'}});
+      qrB64=canvas.toDataURL('image/png');
+    } catch(e){}
 
-    // ── HEADER ──
-    fc(navy); doc.roundedRect(M, y, CW, 28, 4, 4, 'F');
-    if (logoB64) {
-      doc.addImage(logoB64, 'PNG', M+5, y+5, 18, 18);
-    } else {
-      fc(blue); doc.roundedRect(M+5, y+5, 18, 18, 3, 3, 'F');
-      fw('bold', 10); tc(white); doc.text('KP', M+14, y+15.5, {align:'center'});
-    }
-    fw('bold', 13); tc(white);
-    doc.text('Championnat de France ' + d.compet + ' 2026', M+27, y+12);
-    fw('normal', 7.5); tc(t3);
-    doc.text('KAYAK POLO STATS', M+27, y+18);
-
-    fw('bold', 9); tc([226,232,240]);
-    doc.text(d.journee + ' — ' + d.lieu, W-M-3, y+10, {align:'right'});
-    fw('normal', 7.5); tc(t3);
-    const dStr = d.dates.map(x => x.substring(0,5)).join(' & ');
-    doc.text(dStr, W-M-3, y+16, {align:'right'});
-    const now = new Date();
-    doc.text('Généré le ' + now.toLocaleDateString('fr-FR') + ' à ' + now.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}), W-M-3, y+22, {align:'right'});
-    y += 32;
+    // ── HEADER compact (18mm) ──
+    const hH=18;
+    fc(navy); doc.roundedRect(M,y,CW,hH,3,3,'F');
+    if(logoB64){ doc.addImage(logoB64,'PNG',M+4,y+3,12,12); }
+    else { fc(blue); doc.roundedRect(M+4,y+3,12,12,2,2,'F'); fw('bold',7);tc(white);doc.text('KP',M+10,y+10.5,{align:'center'}); }
+    fw('bold',11); tc(white);
+    doc.text('Championnat de France '+d.compet+' 2026', M+20, y+8);
+    fw('normal',7); tc(t3);
+    doc.text('KAYAK POLO STATS', M+20, y+14);
+    fw('bold',8.5); tc([210,220,235]);
+    doc.text(d.journee+' — '+d.lieu, W-M-3, y+8, {align:'right'});
+    fw('normal',6.5); tc(t3);
+    doc.text(d.dates.map(x=>x.substring(0,5)).join(' & '), W-M-3, y+14, {align:'right'});
+    y += hH+6;
 
     // ── Team name ──
-    fw('bold', 11.5); tc(t1);
-    doc.text(d.team, M, y);
-    fw('normal', 8); tc(t3);
-    doc.text(d.journee + ' · ' + d.lieu, M, y+6);
-    y += 13;
+    fw('bold',12); tc(t1); doc.text(d.team, M, y);
+    y += 9;
 
     // ── Days ──
-    for (const [dateStr, dayMs] of Object.entries(d.byDay)) {
-      if (!dayMs.length) continue;
-      const p = dateStr.split('/');
-      const dt2 = new Date(+p[2], +p[1]-1, +p[0]);
-      const dn = ['Dimanche','Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi'][dt2.getDay()];
-      const mn = ['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'][dt2.getMonth()];
-      const dayLabel = dn + ' ' + p[0] + ' ' + mn;
-      const neededH = 11 + dayMs.length * 16;
-      if (y + neededH > H - 38) { doc.addPage(); y = M; }
+    const rH=13, dayGap=4, dayHeaderH=10;
+    for(const [dateStr,dayMs] of Object.entries(d.byDay)){
+      if(!dayMs.length) continue;
+      const p=dateStr.split('/');
+      const dt2=new Date(+p[2],+p[1]-1,+p[0]);
+      const dn=['Dimanche','Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi'][dt2.getDay()];
+      const mn=['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'][dt2.getMonth()];
+      const dayLabel=dn+' '+p[0]+' '+mn;
 
-      // Day header — ligne séparatrice sobre
       dc(navy); doc.setLineWidth(0.5);
-      doc.line(M, y+7, W-M, y+7);
-      fw('bold', 9.5); tc(navy);
-      doc.text(dayLabel.toUpperCase(), M, y+5.5);
-      fw('normal', 7.5); tc(t3);
-      doc.text(dayMs.length + ' match' + (dayMs.length>1?'s':''), W-M-3, y+5.5, {align:'right'});
-      y += 12;
+      doc.line(M, y+dayHeaderH-1, W-M, y+dayHeaderH-1);
+      fw('bold',9); tc(navy); doc.text(dayLabel.toUpperCase(), M, y+7);
+      fw('normal',7); tc(t3); doc.text(dayMs.length+' match'+(dayMs.length>1?'s':''), W-M-3, y+7, {align:'right'});
+      y += dayHeaderH+2;
 
-      for (const m of dayMs) {
-        const rH = 15;
-        if (y + rH > H - 18) { doc.addPage(); y = M; }
-
-        // Row bg très léger
-        fc(rowBg); dc(line); doc.setLineWidth(0.2);
+      for(const m of dayMs){
+        fc(rowBg); dc(lineC); doc.setLineWidth(0.15);
         doc.roundedRect(M, y, CW, rH, 1.5, 1.5, 'FD');
-
-        // Barre gauche colorée : bleu=mon match, gris foncé=arbi p, gris clair=arbi s
-        const barC = m.type==='match' ? blue : (m.type==='arbi_p' ? t2 : t3);
+        const barC=m.type==='match'?blue:(m.type==='arbi_p'?t2:t3);
         fc(barC); doc.rect(M, y, 3, rH, 'F');
 
-        // Time
-        fw('bold', 9); tc(t1);
-        doc.text(m.heure || '--:--', M+6, y+6);
+        fw('bold',8.5); tc(t1); doc.text(m.heure||'--:--', M+5, y+5.5);
+        if(m.terrain){ fw('bold',6); tc(t3); doc.text('T'+m.terrain, M+5, y+10.5); }
 
-        // Terrain
-        if (m.terrain) {
-          fw('bold', 7); tc(t3);
-          doc.text('T'+m.terrain, M+6, y+11.5);
-        }
-
-        // Teams
-        const tx = M+23;
-        if (m.type === 'match') {
-          fw('bold', 8.5);
-          doc.setFont('helvetica', m.is_team_a ? 'bold' : 'normal'); tc(t1);
-          const wA = doc.getTextWidth(m.equipe_a);
-          doc.text(m.equipe_a, tx, y+6);
-          doc.setFontSize(8); doc.setFont('helvetica','normal'); tc(t3);
-          const wV = doc.getTextWidth(' vs ');
-          doc.text(' vs ', tx+wA, y+6);
-          doc.setFontSize(8.5); doc.setFont('helvetica', m.is_team_a ? 'normal' : 'bold'); tc(t1);
-          doc.text(m.equipe_b, tx+wA+wV, y+6);
+        const tx=M+22;
+        if(m.type==='match'){
+          fw('bold',8.5);
+          doc.setFont('helvetica',m.is_team_a?'bold':'normal'); tc(t1);
+          const wA=doc.getTextWidth(m.equipe_a); doc.text(m.equipe_a,tx,y+5.5);
+          doc.setFontSize(7.5); doc.setFont('helvetica','normal'); tc(t3);
+          const wV=doc.getTextWidth(' vs '); doc.text(' vs ',tx+wA,y+5.5);
+          doc.setFontSize(8.5); doc.setFont('helvetica',m.is_team_a?'normal':'bold'); tc(t1);
+          doc.text(m.equipe_b, tx+wA+wV, y+5.5);
         } else {
-          fw('normal', 8.5); tc(t1);
-          doc.text(m.equipe_a + ' vs ' + m.equipe_b, tx, y+6);
+          fw('normal',8.5); tc(t1);
+          doc.text(m.equipe_a+' vs '+m.equipe_b, tx, y+5.5);
         }
+        const arbi=[];
+        if(m.arbitre_principal) arbi.push('P: '+m.arbitre_principal);
+        if(m.arbitre_secondaire) arbi.push('S: '+m.arbitre_secondaire);
+        if(arbi.length){ fw('normal',6); tc(t3); doc.text(arbi.join('   '), tx, y+10.5); }
 
-        // Arbitres
-        const arbi = [];
-        if (m.arbitre_principal) arbi.push('P: '+m.arbitre_principal);
-        if (m.arbitre_secondaire) arbi.push('S: '+m.arbitre_secondaire);
-        if (arbi.length) { fw('normal', 6.5); tc(t3); doc.text(arbi.join('   '), tx, y+11.5); }
-
-        // Droite : score ou label texte sobre
-        if (m.joue && m.score) {
-          let sc = t1;
-          if (m.type==='match') { const r = m.is_team_a ? m.resultat_a : m.resultat_b; sc = r==='V'?green:(r==='D'?red:amber); }
-          fw('bold', 11); tc(sc); doc.text(m.score, W-M-3, y+8, {align:'right'});
-        } else if (!m.joue && m.type !== 'match') {
-          fw('bold', 6.5); tc(t2);
-          const lbl = m.type==='arbi_p' ? 'ARBI PRINCIPAL' : 'ARBI SECOND.';
-          doc.text(lbl, W-M-3, y+8, {align:'right'});
+        if(m.joue&&m.score){
+          let sc=t1; if(m.type==='match'){const r=m.is_team_a?m.resultat_a:m.resultat_b;sc=r==='V'?green:(r==='D'?red:amber);}
+          fw('bold',11); tc(sc); doc.text(m.score, W-M-3, y+7.5, {align:'right'});
+        } else if(!m.joue&&m.type!=='match'){
+          fw('bold',6); tc(t2); doc.text(m.type==='arbi_p'?'ARBI PRINCIPAL':'ARBI SECOND.', W-M-3, y+7.5, {align:'right'});
         } else {
-          fw('normal', 7.5); tc(t3); doc.text('À jouer', W-M-3, y+7, {align:'right'});
+          fw('normal',7); tc(t3); doc.text('À jouer', W-M-3, y+7, {align:'right'});
         }
-        y += rH + 2;
+        y += rH+2;
       }
-      y += 6;
+      y += dayGap;
     }
 
-    if (!Object.keys(d.byDay).length) {
-      fw('normal', 10); tc(t2);
-      doc.text('Aucun match trouvé pour cette journée.', M, y+10);
-      y += 20;
+    if(!Object.keys(d.byDay).length){
+      fw('normal',10); tc(t2); doc.text('Aucun match trouvé.', M, y+10); y+=20;
     }
-
-    // ── QR CODE ──
-    let qrDataUrl = null;
-    try {
-      const qrDiv = document.createElement('div');
-      qrDiv.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:120px;height:120px;background:#fff';
-      document.body.appendChild(qrDiv);
-      await new Promise(resolve => {
-        new QRCode(qrDiv, { text: 'https://kp-stats.duckdns.org', width: 120, height: 120, colorDark: '#0f172a', colorLight: '#ffffff', correctLevel: QRCode.CorrectLevel.M });
-        setTimeout(resolve, 150);
-      });
-      const qrCanvas = qrDiv.querySelector('canvas');
-      if (qrCanvas) qrDataUrl = qrCanvas.toDataURL('image/png');
-      document.body.removeChild(qrDiv);
-    } catch(e) {}
 
     // ── FOOTER ──
-    const qrS = 20;
-    const qrX = W - M - qrS;
-    const qrY = H - M - qrS;
-    // Ligne de séparation footer (tout en travers)
-    dc([218,222,228]); doc.setLineWidth(0.3);
-    doc.line(M, H - 26, W - M, H - 26);
-    // QR code : coin bas droit, dans la zone footer
-    if (qrDataUrl) {
-      doc.addImage(qrDataUrl, 'PNG', qrX, qrY, qrS, qrS);
-    }
-    // Texte footer : à gauche, dans la zone footer, sans toucher le QR
-    fw('normal', 7); tc(t3);
-    doc.text('kp-stats.duckdns.org', M, H - 20);
-    doc.text('Made by Vidix', M, H - 14);
-    doc.text('Données non-officielles · kayak-polo.info', M, H - 8);
+    const qrS=18, footerY=H-M-qrS;
+    dc(lineC); doc.setLineWidth(0.3); doc.line(M, footerY-5, W-M, footerY-5);
+    if(qrB64) doc.addImage(qrB64,'PNG', W-M-qrS, footerY, qrS, qrS);
+    fw('normal',6.5); tc(t3);
+    doc.text('kp-stats.duckdns.org', M, footerY+4);
+    doc.text('Made by Vidix', M, footerY+9);
+    doc.text('Données non-officielles · kayak-polo.info', M, footerY+14);
+    const now=new Date();
+    fw('normal',5.5); tc(t3);
+    doc.text('Généré le '+now.toLocaleDateString('fr-FR')+' à '+now.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}), M, footerY+qrS);
 
-    // Save
-    const slug = d.team.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9]+/g,'-').toLowerCase();
-    doc.save('kps-' + slug + '-' + d.journee.toLowerCase() + '.pdf');
+    const slug=d.team.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9]+/g,'-').toLowerCase();
+    doc.save('kps-'+slug+'-'+d.journee.toLowerCase()+'.pdf');
 
   } catch(e) {
-    console.error(e);
-    alert('Erreur lors de la génération du PDF : ' + e.message);
+    console.error(e); alert('Erreur PDF : '+e.message);
   } finally {
-    btn.innerHTML = origHTML;
-    btn.disabled = false;
+    btn.innerHTML=origHTML; btn.disabled=false;
   }
 }
+
 
 function switchDay(day, btn) {
   document.querySelectorAll('.day-section').forEach(s => s.classList.remove('active'));
