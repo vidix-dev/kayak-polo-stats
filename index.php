@@ -1863,7 +1863,11 @@ footer a { color: var(--text3); text-decoration: underline; }
 
 <footer>
   Kayak Polo Stats &mdash; Made by <strong>Vidix</strong><br>
-  Données non-officielles extraites de <a href="https://www.kayak-polo.info" target="_blank" rel="noopener">kayak-polo.info</a>
+  Données non-officielles extraites de <a href="https://www.kayak-polo.info" target="_blank" rel="noopener">kayak-polo.info</a><br>
+  <a href="https://www.instagram.com/victor.dst3/" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:5px;margin-top:8px;color:var(--text3);text-decoration:none;font-size:.75rem;">
+    <img src="/insta.png" alt="Instagram" style="width:16px;height:16px;border-radius:50%;opacity:.6;">
+    @victor.dst3
+  </a>
 </footer>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
