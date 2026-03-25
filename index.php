@@ -1885,24 +1885,18 @@ async function generatePDF() {
     const W = 210, H = 297, M = 12, CW = 210 - 24;
     let y = M;
 
-    // Colors
+    // Colors — palette pro monochrome + accent
     const navy  = [15, 23, 42];
-    const blue  = [0, 113, 227];
+    const blue  = [0, 100, 200];
     const white = [255,255,255];
     const t1    = [15, 23, 42];
     const t2    = [71, 85, 105];
     const t3    = [148, 163, 184];
-    const bgM   = [239, 246, 255];
-    const bgAP  = [245, 243, 255];
-    const bgAS  = [250, 245, 255];
-    const bdM   = [191, 219, 254];
-    const bdAP  = [196, 181, 253];
-    const bdAS  = [233, 213, 255];
-    const violet= [124, 58, 237];
-    const purp  = [139, 92, 246];
-    const green = [22, 163, 74];
-    const red   = [220, 38, 38];
-    const amber = [217, 119, 6];
+    const rowBg = [250, 251, 252];
+    const line  = [218, 222, 228];
+    const green = [34, 139, 60];
+    const red   = [185, 40, 40];
+    const amber = [155, 105, 10];
 
     const fc = c => doc.setFillColor(...c);
     const tc = c => doc.setTextColor(...c);
@@ -1941,10 +1935,9 @@ async function generatePDF() {
     // ── Team name ──
     fw('bold', 11.5); tc(t1);
     doc.text(d.team, M, y);
-    const nw = doc.getTextWidth(d.team);
-    fc(blue); doc.roundedRect(M+nw+4, y-6.5, doc.setFontSize(6.5).getTextWidth('Mon équipe')+8, 7, 2, 2, 'F');
-    fw('bold', 6.5); tc(white); doc.text('Mon équipe', M+nw+8, y-1.3);
-    y += 9;
+    fw('normal', 8); tc(t3);
+    doc.text(d.journee + ' · ' + d.lieu, M, y+6);
+    y += 13;
 
     // ── Days ──
     for (const [dateStr, dayMs] of Object.entries(d.byDay)) {
@@ -1957,76 +1950,75 @@ async function generatePDF() {
       const neededH = 11 + dayMs.length * 16;
       if (y + neededH > H - 18) { doc.addPage(); y = M; }
 
-      // Day header
-      fc(blue); doc.roundedRect(M, y, CW, 8, 2, 2, 'F');
-      fw('bold', 8.5); tc(white);
-      doc.text(dayLabel, M+4, y+5.5);
+      // Day header — ligne séparatrice sobre
+      dc(navy); doc.setLineWidth(0.5);
+      doc.line(M, y+7, W-M, y+7);
+      fw('bold', 9.5); tc(navy);
+      doc.text(dayLabel.toUpperCase(), M, y+5.5);
+      fw('normal', 7.5); tc(t3);
       doc.text(dayMs.length + ' match' + (dayMs.length>1?'s':''), W-M-3, y+5.5, {align:'right'});
-      y += 11;
+      y += 12;
 
       for (const m of dayMs) {
-        const rH = 14;
+        const rH = 15;
         if (y + rH > H - 18) { doc.addPage(); y = M; }
 
-        // Row bg
-        const bg  = m.type==='match' ? bgM : (m.type==='arbi_p' ? bgAP : bgAS);
-        const bd  = m.type==='match' ? bdM : (m.type==='arbi_p' ? bdAP : bdAS);
-        fc(bg); dc(bd); doc.setLineWidth(0.25);
-        doc.roundedRect(M, y, CW, rH, 2, 2, 'FD');
+        // Row bg très léger
+        fc(rowBg); dc(line); doc.setLineWidth(0.2);
+        doc.roundedRect(M, y, CW, rH, 1.5, 1.5, 'FD');
+
+        // Barre gauche colorée : bleu=mon match, gris foncé=arbi p, gris clair=arbi s
+        const barC = m.type==='match' ? blue : (m.type==='arbi_p' ? t2 : t3);
+        fc(barC); doc.rect(M, y, 3, rH, 'F');
 
         // Time
         fw('bold', 9); tc(t1);
-        doc.text(m.heure || '--:--', M+3, y+5.8);
+        doc.text(m.heure || '--:--', M+6, y+6);
 
         // Terrain
         if (m.terrain) {
-          fc([241,245,249]); dc([203,213,225]); doc.setLineWidth(0.15);
-          doc.roundedRect(M+20, y+2.8, 9, 5.5, 1.5, 1.5, 'FD');
-          fw('bold', 7); tc(t2);
-          doc.text('T'+m.terrain, M+24.5, y+6.8, {align:'center'});
+          fw('bold', 7); tc(t3);
+          doc.text('T'+m.terrain, M+6, y+11.5);
         }
 
         // Teams
-        const tx = M+33;
-        fw('bold', 8.5);
+        const tx = M+23;
         if (m.type === 'match') {
-          doc.setFont('helvetica', m.is_team_a ? 'bold' : 'normal');
-          tc(m.is_team_a ? blue : t1);
+          fw('bold', 8.5);
+          doc.setFont('helvetica', m.is_team_a ? 'bold' : 'normal'); tc(t1);
           const wA = doc.getTextWidth(m.equipe_a);
-          doc.text(m.equipe_a, tx, y+5.8);
+          doc.text(m.equipe_a, tx, y+6);
           doc.setFontSize(8); doc.setFont('helvetica','normal'); tc(t3);
           const wV = doc.getTextWidth(' vs ');
-          doc.text(' vs ', tx+wA, y+5.8);
-          doc.setFontSize(8.5); doc.setFont('helvetica', m.is_team_a ? 'normal' : 'bold');
-          tc(m.is_team_a ? t1 : blue);
-          doc.text(m.equipe_b, tx+wA+wV, y+5.8);
+          doc.text(' vs ', tx+wA, y+6);
+          doc.setFontSize(8.5); doc.setFont('helvetica', m.is_team_a ? 'normal' : 'bold'); tc(t1);
+          doc.text(m.equipe_b, tx+wA+wV, y+6);
         } else {
           fw('normal', 8.5); tc(t1);
-          doc.text(m.equipe_a + ' vs ' + m.equipe_b, tx, y+5.8);
+          doc.text(m.equipe_a + ' vs ' + m.equipe_b, tx, y+6);
         }
 
         // Arbitres
         const arbi = [];
         if (m.arbitre_principal) arbi.push('P: '+m.arbitre_principal);
         if (m.arbitre_secondaire) arbi.push('S: '+m.arbitre_secondaire);
-        if (arbi.length) { fw('normal', 6.5); tc(t3); doc.text(arbi.join('   '), tx, y+10.5); }
+        if (arbi.length) { fw('normal', 6.5); tc(t3); doc.text(arbi.join('   '), tx, y+11.5); }
 
-        // Score / badge
+        // Droite : score ou label texte sobre
         if (m.joue && m.score) {
           let sc = t1;
           if (m.type==='match') { const r = m.is_team_a ? m.resultat_a : m.resultat_b; sc = r==='V'?green:(r==='D'?red:amber); }
-          fw('bold', 11); tc(sc); doc.text(m.score, W-M-3, y+7.5, {align:'right'});
+          fw('bold', 11); tc(sc); doc.text(m.score, W-M-3, y+8, {align:'right'});
         } else if (!m.joue && m.type !== 'match') {
-          const bc = m.type==='arbi_p' ? violet : purp;
-          const bl = m.type==='arbi_p' ? 'PRINCIPAL' : 'SECONDAIRE';
-          const bw = 22; fc(bc); doc.roundedRect(W-M-bw-1, y+2.5, bw, 5.5, 1.5, 1.5, 'F');
-          fw('bold', 6); tc(white); doc.text(bl, W-M-1-bw/2, y+6.5, {align:'center'});
-        } else if (!m.joue) {
-          fw('normal', 7.5); tc(t3); doc.text('À jouer', W-M-3, y+6.5, {align:'right'});
+          fw('bold', 6.5); tc(t2);
+          const lbl = m.type==='arbi_p' ? 'ARBI PRINCIPAL' : 'ARBI SECOND.';
+          doc.text(lbl, W-M-3, y+8, {align:'right'});
+        } else {
+          fw('normal', 7.5); tc(t3); doc.text('À jouer', W-M-3, y+7, {align:'right'});
         }
         y += rH + 2;
       }
-      y += 5;
+      y += 6;
     }
 
     if (!Object.keys(d.byDay).length) {
