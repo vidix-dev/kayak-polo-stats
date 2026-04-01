@@ -1,5 +1,5 @@
 # Kayak Polo Stats
-![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue.svg)
+![License: GPL v2](https://img.shields.io/badge/license-GNv2-blue.svg)
 
 Dashboard non-officiel pour le **kayak polo en France**
 Données extraites automatiquement depuis [kayak-polo.info](https://www.kayak-polo.info).
