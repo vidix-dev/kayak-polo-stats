@@ -9,6 +9,18 @@ define('CACHE_TTL',  300);
 define('VISIT_LOG',  __DIR__ . '/logs/visits.log');
 define('STATS_KEY',  'kps_vidix_2026');
 
+// ── Compétitions disponibles ──────────────────────────────────────
+// 'group' = paramètre Group= dans l'URL KPI
+$COMPETITIONS = [
+    'N1H' => ['label' => 'Nationale 1 Hommes',  'group' => 'N1H', 'cat' => 'Nationales'],
+    'N1D' => ['label' => 'Nationale 1 Dames',   'group' => 'N1D', 'cat' => 'Nationales'],
+    'N2H' => ['label' => 'Nationale 2 Hommes',  'group' => 'N2H', 'cat' => 'Nationales'],
+    'N2D' => ['label' => 'Nationale 2 Dames',   'group' => 'N2D', 'cat' => 'Nationales'],
+    'N3'  => ['label' => 'Nationale 3',          'group' => 'N3',  'cat' => 'Nationales'],
+    'N18' => ['label' => 'Championnat U18',      'group' => 'N18', 'cat' => 'Nationales Jeunes'],
+    'N15' => ['label' => 'Championnat U15',      'group' => 'N15', 'cat' => 'Nationales Jeunes'],
+];
+
 function logVisit(string $compet, string $team): void {
     $dir = dirname(VISIT_LOG);
     if (!is_dir($dir)) mkdir($dir, 0775, true);
@@ -42,9 +54,7 @@ if (isset($_GET['stats']) && $_GET['stats'] === STATS_KEY) {
     echo "Total visites     : $total\n";
     echo "Visiteurs uniques : " . count($ips) . "\n\n";
     echo "--- Par jour ---\n";
-    foreach (array_reverse($days, true) as $d => $u) {
-        echo "$d  " . count($u) . " visiteur(s) unique(s)\n";
-    }
+    foreach (array_reverse($days, true) as $d => $u) echo "$d  " . count($u) . " visiteur(s) unique(s)\n";
     echo "\n--- Par compétition ---\n";
     foreach ($compets as $c => $n) echo "$c : $n visite(s)\n";
     echo "\n--- 20 dernières visites ---\n";
@@ -52,26 +62,14 @@ if (isset($_GET['stats']) && $_GET['stats'] === STATS_KEY) {
     exit;
 }
 
-$JOURNEES_N18 = [
-    'J1'      => ['dates' => ['28/03/2026','29/03/2026'],              'lieu' => 'Acigné'],
-    'J2'      => ['dates' => ['25/04/2026'],                           'lieu' => 'Saint-Omer'],
-    'J3'      => ['dates' => ['23/05/2026'],                           'lieu' => 'Avranches'],
-    'Finales' => ['dates' => ['03/07/2026','04/07/2026','05/07/2026'], 'lieu' => 'TBD'],
-];
-$JOURNEES_N15 = [
-    'J1'      => ['dates' => ['28/03/2026','29/03/2026'],              'lieu' => 'Acigné'],
-    'J2'      => ['dates' => ['25/04/2026'],                           'lieu' => 'Saint-Omer'],
-    'J3'      => ['dates' => ['23/05/2026'],                           'lieu' => 'Avranches'],
-    'Finales' => ['dates' => ['03/07/2026','04/07/2026','05/07/2026'], 'lieu' => 'TBD'],
-];
-
 // ── Cookie compétition ────────────────────────────────────────────
+global $COMPETITIONS;
 $selectedCompet = isset($_COOKIE['selected_compet']) ? $_COOKIE['selected_compet'] : null;
-if ($selectedCompet !== 'N15' && $selectedCompet !== 'N18') $selectedCompet = null;
+if (!isset($COMPETITIONS[$selectedCompet])) $selectedCompet = null;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_compet'])) {
     $compet = $_POST['compet'] ?? '';
-    if ($compet === 'N15' || $compet === 'N18') {
+    if (isset($COMPETITIONS[$compet])) {
         setcookie('selected_compet', $compet, ['expires'=>time()+365*24*3600,'path'=>'/','secure'=>true,'httponly'=>true,'samesite'=>'Lax']);
         setcookie('selected_team', '', ['expires'=>time()-3600,'path'=>'/','secure'=>true,'httponly'=>true,'samesite'=>'Lax']);
         header('Location: /');
@@ -85,9 +83,12 @@ if (isset($_GET['clear_compet'])) {
     exit;
 }
 
-$sourceUrl = 'https://www.kayak-polo.info/kpmatchs.php?Compet=*&Group=' . ($selectedCompet ?? 'N18') . '&Saison=2026';
-$cacheFile = __DIR__ . '/cache/matches_' . ($selectedCompet ?? 'N18') . '.json';
-$JOURNEES  = $selectedCompet === 'N15' ? $JOURNEES_N15 : $JOURNEES_N18;
+$competInfo  = $selectedCompet ? $COMPETITIONS[$selectedCompet] : null;
+$groupCode   = $competInfo ? $competInfo['group'] : 'N18';
+$competLabel = $competInfo ? $competInfo['label'] : '';
+
+$sourceUrl = 'https://www.kayak-polo.info/kpmatchs.php?Compet=*&Group=' . urlencode($groupCode) . '&Saison=2026';
+$cacheFile = __DIR__ . '/cache/matches_' . $selectedCompet . '.json';
 
 // ── Cookie équipe ─────────────────────────────────────────────────
 $selectedTeam = isset($_COOKIE['selected_team']) ? cleanName($_COOKIE['selected_team']) : null;
@@ -107,6 +108,9 @@ if (isset($_GET['clear_team'])) {
 }
 if (isset($_GET['clear_cache'])) {
     if (file_exists($cacheFile)) unlink($cacheFile);
+    // Vider aussi le cache buteurs
+    $scorersFile = str_replace('matches_', 'scorers_', $cacheFile);
+    if (file_exists($scorersFile)) unlink($scorersFile);
     header('Location: ' . strtok($_SERVER['REQUEST_URI'],'?'));
     exit;
 }
@@ -124,6 +128,55 @@ function curlGet(string $url): string {
     $html = curl_exec($ch);
     curl_close($ch);
     return $html ?: '';
+}
+
+// ── Détection automatique des journées ────────────────────────────
+// Regroupe les dates par blocs consécutifs (écart ≤ 1 jour = même journée)
+function buildJourneesFromMatches(array $matches): array {
+    $dates = [];
+    foreach ($matches as $m) {
+        if (!$m['date']) continue;
+        $dt = DateTime::createFromFormat('d/m/Y', $m['date']);
+        if ($dt) $dates[$m['date']] = $dt->getTimestamp();
+    }
+    if (!$dates) return [];
+
+    arsort($dates); // tri par timestamp
+    $dates = array_keys(array_reverse($dates, true)); // plus ancienne en premier
+    // tri chronologique
+    usort($dates, fn($a,$b) => (DateTime::createFromFormat('d/m/Y',$a)?->getTimestamp()??0)
+                             <=> (DateTime::createFromFormat('d/m/Y',$b)?->getTimestamp()??0));
+    $dates = array_unique($dates);
+
+    $journees = [];
+    $jNum     = 1;
+    $bloc     = [];
+    $prevTs   = null;
+
+    foreach ($dates as $d) {
+        $ts = DateTime::createFromFormat('d/m/Y', $d)?->getTimestamp() ?? 0;
+        if ($prevTs !== null && ($ts - $prevTs) > 86400 * 2) {
+            // Nouvel écart > 2 jours → nouvelle journée
+            $jKey = 'J' . $jNum;
+            $journees[$jKey] = ['dates' => $bloc, 'lieu' => ''];
+            $jNum++;
+            $bloc = [];
+        }
+        $bloc[] = $d;
+        $prevTs = $ts;
+    }
+    if ($bloc) {
+        $jKey = 'J' . $jNum;
+        $journees[$jKey] = ['dates' => $bloc, 'lieu' => ''];
+    }
+    return $journees;
+}
+
+function detectJourneeFromMap(string $dateStr, array $journees): string {
+    foreach ($journees as $nom => $info) {
+        if (in_array($dateStr, $info['dates'], true)) return $nom;
+    }
+    return '?';
 }
 
 // ── Buteurs ────────────────────────────────────────────────────────
@@ -227,7 +280,7 @@ function getMatches(): array {
         if (preg_match('/Terr\s*(\d+)/i', $detail, $tm)) $terrain = $tm[1];
         $matches[] = [
             'num'                => $num,
-            'journee'            => detectJournee($dateStr),
+            'journee'            => '', // sera calculé après
             'date'               => $dateStr,
             'heure'              => $heureStr,
             'lieu'               => $cols[3] ?? '',
@@ -244,6 +297,13 @@ function getMatches(): array {
             'arbitre_secondaire' => cleanName($cols[9] ?? ''),
         ];
     }
+    // Construire les journées automatiquement puis les assigner
+    $journees = buildJourneesFromMatches($matches);
+    foreach ($matches as &$m) {
+        $m['journee'] = detectJourneeFromMap($m['date'], $journees);
+    }
+    unset($m);
+
     if (!is_dir(dirname($cacheFile))) mkdir(dirname($cacheFile), 0775, true);
     file_put_contents($cacheFile, json_encode($matches, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
     return $matches;
@@ -252,14 +312,6 @@ function getMatches(): array {
 function cleanName(string $name): string {
     $name = preg_replace('/\s+I\s*$/', '', trim($name));
     return preg_replace('/\s{2,}/', ' ', trim($name));
-}
-
-function detectJournee(string $dateStr): string {
-    global $JOURNEES;
-    foreach ($JOURNEES as $nom => $info) {
-        if (in_array($dateStr, $info['dates'], true)) return $nom;
-    }
-    return '?';
 }
 
 // ── Classement ────────────────────────────────────────────────────
@@ -289,7 +341,6 @@ function buildStandings(array $matches): array {
             $teams[$b]['n']++; $teams[$b]['pts'] += 2; $teams[$b]['serie'][] = 'N';
         }
     }
-    // Ajouter les équipes sans matchs joués
     foreach (getAllTeams($matches) as $name) {
         if (!isset($teams[$name])) {
             $teams[$name] = ['equipe'=>$name,'mj'=>0,'v'=>0,'n'=>0,'d'=>0,
@@ -302,9 +353,7 @@ function buildStandings(array $matches): array {
     }
     unset($t);
     $s = array_values($teams);
-    // Tri primaire par points
     usort($s, fn($a,$b) => $b['pts'] <=> $a['pts']);
-    // Départage officiel FFCK par groupes à égalité de points
     $result = [];
     $i = 0;
     while ($i < count($s)) {
@@ -313,7 +362,6 @@ function buildStandings(array $matches): array {
         $group = array_slice($s, $i, $j - $i);
         if (count($group) > 1) {
             $groupNames = array_column($group, 'equipe');
-            // Calcul des stats head-to-head entre les équipes du groupe
             $h2h = array_fill_keys($groupNames, ['pts'=>0,'bp'=>0,'bc'=>0]);
             foreach ($matches as $m) {
                 if (!$m['joue']) continue;
@@ -328,14 +376,10 @@ function buildStandings(array $matches): array {
             }
             usort($group, function($a, $b) use ($h2h) {
                 $aH = $h2h[$a['equipe']]; $bH = $h2h[$b['equipe']];
-                // 1. Points entre les équipes concernées
                 if ($aH['pts'] !== $bH['pts']) return $bH['pts'] <=> $aH['pts'];
-                // 2. Différence de buts entre elles
                 $aHGa = $aH['bp'] - $aH['bc']; $bHGa = $bH['bp'] - $bH['bc'];
                 if ($aHGa !== $bHGa) return $bHGa <=> $aHGa;
-                // 3. Différence générale de buts
                 if ($a['ga'] !== $b['ga']) return $b['ga'] <=> $a['ga'];
-                // 4. Buts marqués
                 return $b['bp'] <=> $a['bp'];
             });
         }
@@ -353,9 +397,16 @@ function getAllTeams(array $matches): array {
     return array_keys($t);
 }
 
-// ── Prochains matchs ──────────────────────────────────────────────
+// ── Prochains matchs (avec tolérance 45 min) ─────────────────────
 function findNextMatch(array $matches, string $equipe = ''): ?array {
-    $avenir = array_filter($matches, fn($m) => !$m['joue']);
+    $now    = time();
+    $avenir = array_filter($matches, function($m) use ($now) {
+        if ($m['joue']) return false;
+        $ts = matchTs($m);
+        // Si l'heure est connue et dépassée de plus de 45 min → considéré passé
+        if ($ts !== PHP_INT_MAX && $ts < $now - 45 * 60) return false;
+        return true;
+    });
     if ($equipe) {
         $q = mb_strtolower($equipe);
         $avenir = array_filter($avenir, fn($m) =>
@@ -364,18 +415,22 @@ function findNextMatch(array $matches, string $equipe = ''): ?array {
         );
     }
     if (!$avenir) return null;
-    usort($avenir, fn($a,$b) => matchTs($a)<=>matchTs($b));
+    usort($avenir, fn($a,$b) => matchTs($a) <=> matchTs($b));
     return reset($avenir);
 }
 
 function findNextArbitrage(array $matches, string $equipe, string $type = 'principal'): ?array {
+    $now   = time();
     $q     = mb_strtolower($equipe);
     $field = $type === 'principal' ? 'arbitre_principal' : 'arbitre_secondaire';
-    $avenir = array_filter($matches, fn($m) =>
-        !$m['joue'] && str_contains(mb_strtolower($m[$field]), $q)
-    );
+    $avenir = array_filter($matches, function($m) use ($now, $q, $field) {
+        if ($m['joue']) return false;
+        $ts = matchTs($m);
+        if ($ts !== PHP_INT_MAX && $ts < $now - 45 * 60) return false;
+        return str_contains(mb_strtolower($m[$field]), $q);
+    });
     if (!$avenir) return null;
-    usort($avenir, fn($a,$b) => matchTs($a)<=>matchTs($b));
+    usort($avenir, fn($a,$b) => matchTs($a) <=> matchTs($b));
     return reset($avenir);
 }
 
@@ -495,12 +550,6 @@ function serieBadges(array $serie): string {
     return $html ?: '<span class="muted">-</span>';
 }
 
-function journeeLieu(string $journee): string {
-    global $JOURNEES;
-    return $JOURNEES[$journee]['lieu'] ?? '';
-}
-
-// ── Série de victoires ────────────────────────────────────────────
 function winStreak(array $matches, string $equipe): int {
     $q      = mb_strtolower($equipe);
     $played = array_values(array_filter($matches, fn($m) => $m['joue'] && (
@@ -521,16 +570,16 @@ function winStreak(array $matches, string $equipe): int {
 
 // ── Données ────────────────────────────────────────────────────────
 logVisit($selectedCompet ?? '', $selectedTeam ?? '');
-$matches     = getMatches();
+$matches     = $selectedCompet ? getMatches() : [];
+$JOURNEES    = $selectedCompet ? buildJourneesFromMatches($matches) : [];
 $allTeams    = getAllTeams($matches);
 $standings   = buildStandings($matches);
-$nextGlobal  = findNextMatch($matches);
-$myNext      = $selectedTeam ? findNextMatch($matches, $selectedTeam)              : null;
-$myArbiP     = $selectedTeam ? findNextArbitrage($matches, $selectedTeam, 'principal')   : null;
-$myArbiS     = $selectedTeam ? findNextArbitrage($matches, $selectedTeam, 'secondaire')  : null;
-$impact      = $selectedTeam ? simulateImpact($matches, $selectedTeam, $standings)  : null;
-$myStats     = $selectedTeam ? teamStats($matches, $selectedTeam)                  : null;
-$allScorers  = getScorers();
+$myNext      = $selectedTeam ? findNextMatch($matches, $selectedTeam)                   : null;
+$myArbiP     = $selectedTeam ? findNextArbitrage($matches, $selectedTeam, 'principal')  : null;
+$myArbiS     = $selectedTeam ? findNextArbitrage($matches, $selectedTeam, 'secondaire') : null;
+$impact      = $selectedTeam ? simulateImpact($matches, $selectedTeam, $standings)      : null;
+$myStats     = $selectedTeam ? teamStats($matches, $selectedTeam)                       : null;
+$allScorers  = $selectedTeam ? getScorers()                                             : [];
 
 $totalMatchs = count($matches);
 $totalJoues  = count(array_filter($matches, fn($m) => $m['joue']));
@@ -569,7 +618,6 @@ $champDates = [];
 foreach ($matches as $m) {
     if ($m['date']) $champDates[$m['date']] = true;
 }
-usort(array_keys($champDates), fn($a,$b) => matchTs(['date'=>$a,'heure'=>'']) <=> matchTs(['date'=>$b,'heure'=>'']));
 $champDates = array_keys($champDates);
 usort($champDates, fn($a,$b) => (DateTime::createFromFormat('d/m/Y',$a)?->getTimestamp()??0) <=> (DateTime::createFromFormat('d/m/Y',$b)?->getTimestamp()??0));
 
@@ -583,7 +631,7 @@ if (!$defaultDay) {
 }
 if (!$defaultDay) $defaultDay = end($champDates) ?: $today;
 
-// ── Données PDF (journée en cours / prochaine, matchs de l'équipe) ─
+// ── Données PDF ────────────────────────────────────────────────────
 $pdfJournee = null;
 foreach ($JOURNEES as $jNom => $jInfo) {
     if (in_array($defaultDay, $jInfo['dates'], true)) { $pdfJournee = $jNom; break; }
@@ -596,10 +644,9 @@ if (!$pdfJournee) {
         }
     }
 }
-if (!$pdfJournee) $pdfJournee = array_key_first($JOURNEES);
-$pdfDates  = $JOURNEES[$pdfJournee]['dates'] ?? [];
-$pdfLieu   = $JOURNEES[$pdfJournee]['lieu']  ?? '';
-$pdfCompet = $selectedCompet === 'N15' ? 'U15' : 'U18';
+if (!$pdfJournee && $JOURNEES) $pdfJournee = array_key_first($JOURNEES);
+$pdfDates  = $pdfJournee ? ($JOURNEES[$pdfJournee]['dates'] ?? []) : [];
+$pdfLieu   = $pdfJournee ? ($JOURNEES[$pdfJournee]['lieu']  ?? '') : '';
 $pdfTeamQ  = $selectedTeam ? mb_strtolower($myTeamName ?: $selectedTeam) : '';
 $pdfByDay  = [];
 foreach ($pdfDates as $d) {
@@ -633,8 +680,8 @@ foreach ($pdfDates as $d) {
     if ($dayMs) $pdfByDay[$d] = $dayMs;
 }
 $pdfData = [
-    'compet'  => $pdfCompet,
-    'journee' => $pdfJournee,
+    'compet'  => $competLabel ?: ($selectedCompet ?? ''),
+    'journee' => $pdfJournee ?? '',
     'lieu'    => $pdfLieu,
     'dates'   => $pdfDates,
     'team'    => $myTeamName ?: ($selectedTeam ?? ''),
@@ -646,7 +693,7 @@ $pdfData = [
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Kayak Polo Stats<?= $selectedTeam ? ' — '.h($myTeamName) : '' ?></title>
-<meta name="description" content="Championnat de France <?= $selectedCompet === 'N15' ? 'U15' : 'U18' ?> 2026 — Classements, matchs et statistiques">
+<meta name="description" content="<?= h($competLabel) ?> 2026 — Classements, matchs et statistiques">
 <link rel="icon" type="image/png" href="/kps.png">
 <link rel="apple-touch-icon" href="/kps.png">
 <style>
@@ -692,18 +739,57 @@ body {
   text-align: center;
   margin-bottom: 8px;
 }
-.selector-screen p {
+.selector-screen > p {
   color: var(--text2);
   text-align: center;
-  margin-bottom: 36px;
+  margin-bottom: 28px;
   font-size: .95rem;
+}
+.compet-section {
+  width: 100%;
+  max-width: 640px;
+  margin-bottom: 24px;
+}
+.compet-section-title {
+  font-size: .72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--text3);
+  margin-bottom: 10px;
+  padding-left: 2px;
+}
+.compet-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+}
+.compet-btn {
+  background: var(--bg2);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 18px;
+  text-align: left;
+  cursor: pointer;
+  font-size: .95rem;
+  font-weight: 500;
+  color: var(--text);
+  font-family: inherit;
+  transition: border-color .15s, box-shadow .15s;
+  box-shadow: var(--shadow);
+  width: 100%;
+}
+.compet-btn:hover, .compet-btn:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(0,113,227,.15);
+  outline: none;
 }
 .team-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: 10px;
   width: 100%;
-  max-width: 620px;
+  max-width: 640px;
 }
 .team-btn {
   background: var(--bg2);
@@ -731,12 +817,12 @@ body {
   text-align: center;
 }
 .selector-info {
-  margin-top: 28px;
+  margin-top: 20px;
   width: 100%;
-  max-width: 620px;
+  max-width: 640px;
   background: var(--bg3);
   border-radius: var(--radius);
-  padding: 16px 20px;
+  padding: 14px 18px;
   font-size: .82rem;
   color: var(--text2);
   line-height: 1.6;
@@ -774,18 +860,17 @@ body {
   align-items: center;
   gap: 10px;
 }
-.topbar-team a {
-  color: var(--accent);
-  text-decoration: none;
-  font-size: .78rem;
-}
+.topbar-team a { color: var(--accent); text-decoration: none; font-size: .78rem; }
 .tabs-wrap { background: var(--bg2); border-bottom: 1px solid var(--border); }
 .tabs {
   max-width: 720px;
   margin: 0 auto;
   padding: 0 20px;
   display: flex;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
+.tabs::-webkit-scrollbar { display: none; }
 .tab-btn {
   background: none;
   border: none;
@@ -798,137 +883,34 @@ body {
   font-family: inherit;
   transition: color .15s;
   margin-bottom: -1px;
+  white-space: nowrap;
 }
-.tab-btn.active {
-  color: var(--accent);
-  border-bottom-color: var(--accent);
-}
-.main {
-  max-width: 720px;
-  margin: 0 auto;
-  padding: 24px 20px 60px;
-}
+.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+.main { max-width: 720px; margin: 0 auto; padding: 24px 20px 60px; }
 .tab-panel { display: none; }
 .tab-panel.active { display: block; }
-.card {
-  background: var(--bg2);
-  border-radius: var(--radius);
-  padding: 20px;
-  margin-bottom: 14px;
-  box-shadow: var(--shadow);
-}
-.card-highlight {
-  border: 1.5px solid rgba(0,113,227,.25);
-  background: rgba(0,113,227,.03);
-}
-.card-label {
-  font-size: .72rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: .06em;
-  color: var(--text3);
-  margin-bottom: 6px;
-}
-.card-title {
-  font-size: 1.05rem;
-  font-weight: 600;
-  margin-bottom: 4px;
-}
-.card-sub {
-  font-size: .85rem;
-  color: var(--text2);
-  margin-top: 2px;
-}
-.card-big {
-  font-size: 2rem;
-  font-weight: 700;
-  letter-spacing: -.04em;
-  line-height: 1;
-  margin: 4px 0;
-}
-.card-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 12px;
-}
-.vs {
-  font-size: .88rem;
-  color: var(--text2);
-}
-.info-row {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-top: 10px;
-}
-.info-pill {
-  background: var(--bg3);
-  border-radius: 20px;
-  padding: 4px 11px;
-  font-size: .8rem;
-  color: var(--text2);
-  font-weight: 500;
-}
+.card { background: var(--bg2); border-radius: var(--radius); padding: 20px; margin-bottom: 14px; box-shadow: var(--shadow); }
+.card-highlight { border: 1.5px solid rgba(0,113,227,.25); background: rgba(0,113,227,.03); }
+.card-label { font-size: .72rem; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--text3); margin-bottom: 6px; }
+.card-title { font-size: 1.05rem; font-weight: 600; margin-bottom: 4px; }
+.card-sub { font-size: .85rem; color: var(--text2); margin-top: 2px; }
+.card-big { font-size: 2rem; font-weight: 700; letter-spacing: -.04em; line-height: 1; margin: 4px 0; }
+.card-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.vs { font-size: .88rem; color: var(--text2); }
+.info-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.info-pill { background: var(--bg3); border-radius: 20px; padding: 4px 11px; font-size: .8rem; color: var(--text2); font-weight: 500; }
 .info-pill strong { color: var(--text); font-weight: 600; }
 .no-data { color: var(--text3); font-size: .88rem; font-style: italic; }
-.countdown-badge {
-  background: var(--accent);
-  color: #fff;
-  font-size: .72rem;
-  font-weight: 700;
-  padding: 3px 10px;
-  border-radius: 20px;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-.badge-provisoire {
-  background: #fff3cd;
-  color: #92400e;
-  border: 1px solid #fcd34d;
-  font-size: .68rem;
-  font-weight: 700;
-  padding: 2px 9px;
-  border-radius: 20px;
-  text-transform: uppercase;
-  letter-spacing: .04em;
-}
-.result-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px; height: 24px;
-  border-radius: 6px;
-  font-size: .75rem;
-  font-weight: 700;
-  margin-right: 4px;
-}
+.countdown-badge { background: var(--accent); color: #fff; font-size: .72rem; font-weight: 700; padding: 3px 10px; border-radius: 20px; white-space: nowrap; flex-shrink: 0; }
+.badge-provisoire { background: #fff3cd; color: #92400e; border: 1px solid #fcd34d; font-size: .68rem; font-weight: 700; padding: 2px 9px; border-radius: 20px; text-transform: uppercase; letter-spacing: .04em; }
+.result-badge { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 6px; font-size: .75rem; font-weight: 700; margin-right: 4px; }
 .badge-v { background: #d1fae5; color: #065f46; }
 .badge-d { background: #fee2e2; color: #991b1b; }
 .badge-n { background: #fef9c3; color: #713f12; }
-.standings-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: .84rem;
-}
-.standings-table th {
-  text-align: right;
-  color: var(--text3);
-  font-weight: 600;
-  font-size: .72rem;
-  text-transform: uppercase;
-  letter-spacing: .04em;
-  padding: 6px 8px 10px;
-  border-bottom: 1px solid var(--border);
-}
-.standings-table th:first-child,
-.standings-table th:nth-child(2) { text-align: left; }
-.standings-table td {
-  text-align: right;
-  padding: 10px 8px;
-  border-bottom: 1px solid var(--border);
-  vertical-align: middle;
-}
+.standings-table { width: 100%; border-collapse: collapse; font-size: .84rem; }
+.standings-table th { text-align: right; color: var(--text3); font-weight: 600; font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; padding: 6px 8px 10px; border-bottom: 1px solid var(--border); }
+.standings-table th:first-child, .standings-table th:nth-child(2) { text-align: left; }
+.standings-table td { text-align: right; padding: 10px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
 .standings-table td:first-child { text-align: center; color: var(--text3); font-weight: 600; font-size:.8rem; }
 .standings-table td:nth-child(2) { text-align: left; font-weight: 500; }
 .standings-table tr:last-child td { border-bottom: none; }
@@ -937,39 +919,14 @@ body {
 .pts-cell { font-weight: 700; }
 .ga-pos { color: var(--green); }
 .ga-neg { color: var(--red); }
-.impact-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
-  margin-top: 12px;
-}
-.impact-item {
-  background: var(--bg3);
-  border-radius: var(--radius-sm);
-  padding: 12px;
-  text-align: center;
-}
-.impact-label {
-  font-size: .72rem;
-  text-transform: uppercase;
-  letter-spacing: .05em;
-  color: var(--text3);
-  font-weight: 600;
-  margin-bottom: 4px;
-}
+.impact-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px; }
+.impact-item { background: var(--bg3); border-radius: var(--radius-sm); padding: 12px; text-align: center; }
+.impact-label { font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; color: var(--text3); font-weight: 600; margin-bottom: 4px; }
 .impact-rank { font-size: 1.4rem; font-weight: 700; letter-spacing: -.03em; }
 .impact-rank.better { color: var(--green); }
 .impact-rank.worse  { color: var(--red); }
 .impact-rank.same   { color: var(--text2); }
-.match-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 12px 0;
-  border-bottom: 1px solid var(--border);
-  font-size: .88rem;
-}
+.match-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--border); font-size: .88rem; }
 .match-row:last-child { border-bottom: none; }
 .match-teams { flex: 1; }
 .match-teams .team-name { font-weight: 500; }
@@ -981,107 +938,31 @@ body {
 .match-score.draw { color: var(--orange); }
 .match-meta { font-size: .75rem; color: var(--text3); min-width: 60px; text-align: right; }
 .match-pending { color: var(--text3); font-size: .82rem; }
-.stat-grid {
-  display: grid;
-  grid-template-columns: repeat(3,1fr);
-  gap: 10px;
-  margin-top: 8px;
-}
-.stat-box {
-  background: var(--bg3);
-  border-radius: var(--radius-sm);
-  padding: 14px 12px;
-  text-align: center;
-}
+.stat-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 10px; margin-top: 8px; }
+.stat-box { background: var(--bg3); border-radius: var(--radius-sm); padding: 14px 12px; text-align: center; }
 .stat-box-val { font-size: 1.6rem; font-weight: 700; letter-spacing: -.03em; line-height: 1; }
 .stat-box-lbl { font-size: .72rem; color: var(--text3); text-transform: uppercase; letter-spacing: .05em; margin-top: 4px; font-weight: 600; }
-.section-title {
-  font-size: .72rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: .07em;
-  color: var(--text3);
-  margin: 24px 0 10px;
-}
-.notice {
-  background: var(--bg3);
-  border-radius: var(--radius);
-  padding: 16px 18px;
-  font-size: .84rem;
-  color: var(--text2);
-  line-height: 1.55;
-  margin-bottom: 14px;
-}
+.section-title { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: var(--text3); margin: 24px 0 10px; }
+.notice { background: var(--bg3); border-radius: var(--radius); padding: 16px 18px; font-size: .84rem; color: var(--text2); line-height: 1.55; margin-bottom: 14px; }
 .notice strong { color: var(--text); }
-.cal-day-sep {
-  font-size: .75rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: .06em;
-  color: var(--text3);
-  padding: 10px 4px 6px;
-  border-top: 1px solid var(--border);
-  margin-top: 8px;
-}
+.cal-day-sep { font-size: .75rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--text3); padding: 10px 4px 6px; border-top: 1px solid var(--border); margin-top: 8px; }
 .cal-day-sep:first-child { border-top: none; margin-top: 0; padding-top: 0; }
 .cal-journee { margin-bottom: 24px; }
-.cal-journee-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  margin-bottom: 8px;
-}
+.cal-journee-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 8px; }
 .cal-journee-title { font-size: 1rem; font-weight: 700; letter-spacing: -.02em; }
 .cal-journee-meta { font-size: .78rem; color: var(--text3); margin-top: 2px; }
-.cal-journee-badge {
-  background: var(--bg3);
-  border-radius: 20px;
-  padding: 3px 10px;
-  font-size: .75rem;
-  font-weight: 600;
-  color: var(--text3);
-  white-space: nowrap;
-}
-.cal-match {
-  background: var(--bg2);
-  border-radius: var(--radius-sm);
-  padding: 12px 14px;
-  margin-bottom: 6px;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  box-shadow: var(--shadow);
-}
-.cal-match-mine { border: 1.5px solid var(--accent); }
-.cal-match-arbi-p { border: 1.5px solid #7c3aed; }
-.cal-match-arbi-s { border: 1.5px solid #a78bfa; }
-.cal-match-time {
-  min-width: 44px;
-  text-align: center;
-  font-size: .82rem;
-  font-weight: 700;
-  line-height: 1.3;
-}
+.cal-journee-badge { background: var(--bg3); border-radius: 20px; padding: 3px 10px; font-size: .75rem; font-weight: 600; color: var(--text3); white-space: nowrap; }
+.cal-match { background: var(--bg2); border-radius: var(--radius-sm); padding: 12px 14px; margin-bottom: 6px; display: flex; align-items: center; gap: 12px; box-shadow: var(--shadow); }
+.cal-match-mine    { border: 1.5px solid var(--accent); }
+.cal-match-arbi-p  { border: 1.5px solid #7c3aed; }
+.cal-match-arbi-s  { border: 1.5px solid #a78bfa; }
+.cal-match-time { min-width: 44px; text-align: center; font-size: .82rem; font-weight: 700; line-height: 1.3; }
 .cal-terrain { font-size: .7rem; font-weight: 500; color: var(--text3); }
-.cal-match-teams {
-  flex: 1;
-  font-size: .88rem;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
-}
+.cal-match-teams { flex: 1; font-size: .88rem; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .cal-vs { color: var(--text3); font-size: .75rem; margin: 0 2px; }
 .cal-my-team { font-weight: 700; color: var(--accent); }
-.cal-tag {
-  display: inline-block;
-  font-size: .68rem;
-  font-weight: 600;
-  padding: 2px 7px;
-  border-radius: 20px;
-  margin-left: 4px;
-}
-.cal-tag-mine { background: var(--accent); color: #fff; }
+.cal-tag { display: inline-block; font-size: .68rem; font-weight: 600; padding: 2px 7px; border-radius: 20px; margin-left: 4px; }
+.cal-tag-mine   { background: var(--accent); color: #fff; }
 .cal-tag-arbi-p { background: #7c3aed; color: #fff; }
 .cal-tag-arbi-s { background: #a78bfa; color: #fff; }
 .cal-match-score { min-width: 56px; text-align: right; }
@@ -1090,155 +971,47 @@ body {
 .cal-score.loss { color: var(--red); }
 .cal-score.draw { color: var(--orange); }
 .cal-score-pending { font-size: .78rem; color: var(--text3); font-weight: 500; }
-.day-picker {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-bottom: 20px;
-}
-.day-btn {
-  background: var(--bg2);
-  border: 1.5px solid var(--border);
-  border-radius: 20px;
-  padding: 6px 14px;
-  font-size: .82rem;
-  font-weight: 600;
-  color: var(--text2);
-  cursor: pointer;
-  font-family: inherit;
-  transition: all .15s;
-  white-space: nowrap;
-}
+.day-picker { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 20px; }
+.day-btn { background: var(--bg2); border: 1.5px solid var(--border); border-radius: 20px; padding: 6px 14px; font-size: .82rem; font-weight: 600; color: var(--text2); cursor: pointer; font-family: inherit; transition: all .15s; white-space: nowrap; }
 .day-btn:hover { border-color: var(--accent); color: var(--accent); }
 .day-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 .day-btn.has-match { border-color: var(--accent); color: var(--accent); }
 .day-btn.has-match.active { background: var(--accent); color: #fff; }
 .day-section { display: none; }
 .day-section.active { display: block; }
-.match-type-badge {
-  display: inline-block;
-  font-size: .68rem;
-  font-weight: 700;
-  padding: 2px 8px;
-  border-radius: 20px;
-  margin-left: 6px;
-  vertical-align: middle;
-}
+.match-type-badge { display: inline-block; font-size: .68rem; font-weight: 700; padding: 2px 8px; border-radius: 20px; margin-left: 6px; vertical-align: middle; }
 .badge-joue   { background: #d1fae5; color: #065f46; }
 .badge-arbi-p { background: #ede9fe; color: #5b21b6; }
 .badge-arbi-s { background: #f3e8ff; color: #7c3aed; }
 .badge-avenir { background: var(--bg3); color: var(--text2); }
 .day-empty { color: var(--text3); font-size: .88rem; font-style: italic; padding: 12px 0; }
-.fire-card {
-  border: 1.5px solid #f97316;
-  background: rgba(249,115,22,.04);
-}
-.fire-label {
-  font-size: .72rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: .06em;
-  color: #f97316;
-  margin-bottom: 10px;
-}
-.fire-team {
-  font-size: .95rem;
-  font-weight: 600;
-  color: var(--text);
-  margin-bottom: 2px;
-}
-.fire-sub {
-  font-size: .82rem;
-  color: var(--text2);
-}
-.fire-streak {
-  font-size: 2rem;
-  font-weight: 800;
-  letter-spacing: -.04em;
-  color: #f97316;
-  line-height: 1;
-}
-/* ── Buteurs ─────────────────────────────────────────────────────── */
+.fire-card { border: 1.5px solid #f97316; background: rgba(249,115,22,.04); }
+.fire-label { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: #f97316; margin-bottom: 10px; }
+.fire-team { font-size: .95rem; font-weight: 600; color: var(--text); margin-bottom: 2px; }
+.fire-sub { font-size: .82rem; color: var(--text2); }
+.fire-streak { font-size: 2rem; font-weight: 800; letter-spacing: -.04em; color: #f97316; line-height: 1; }
 .scorers-section { margin-bottom: 28px; }
-.scorers-title {
-  font-size: .7rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: .08em;
-  color: var(--text3);
-  padding: 0 0 10px;
-}
+.scorers-title { font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--text3); padding: 0 0 10px; }
 .scorers-table { width: 100%; border-collapse: collapse; font-size: .88rem; }
-.scorers-table th {
-  text-align: left;
-  padding: 6px 8px;
-  font-size: .72rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: .06em;
-  color: var(--text3);
-  border-bottom: 1px solid var(--border);
-}
-.scorers-table th:last-child,
-.scorers-table td:last-child { text-align: right; }
-.scorers-table th:first-child,
-.scorers-table td:first-child { text-align: center; width: 38px; }
-.scorers-table td {
-  padding: 9px 8px;
-  border-bottom: 1px solid var(--border);
-  color: var(--text);
-}
+.scorers-table th { text-align: left; padding: 6px 8px; font-size: .72rem; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--text3); border-bottom: 1px solid var(--border); }
+.scorers-table th:last-child, .scorers-table td:last-child { text-align: right; }
+.scorers-table th:first-child, .scorers-table td:first-child { text-align: center; width: 38px; }
+.scorers-table td { padding: 9px 8px; border-bottom: 1px solid var(--border); color: var(--text); }
 .scorers-table tr:last-child td { border-bottom: none; }
 .scorers-table tr.me td { background: rgba(0,113,227,.06); font-weight: 600; }
 .scorer-rank { color: var(--text3); font-size: .82rem; font-weight: 600; }
 .scorer-rank.top3 { color: var(--accent); font-weight: 700; }
 .scorer-buts { font-weight: 700; color: var(--text); }
 .scorer-team { color: var(--text2); font-size: .8rem; }
-.scorer-general-rank {
-  display: inline-block;
-  background: var(--bg3);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 1px 7px;
-  font-size: .75rem;
-  color: var(--text2);
-  font-weight: 600;
-}
-footer {
-  text-align: center;
-  padding: 32px 20px 24px;
-  font-size: .75rem;
-  color: var(--text3);
-}
+.scorer-general-rank { display: inline-block; background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; padding: 1px 7px; font-size: .75rem; color: var(--text2); font-weight: 600; }
+footer { text-align: center; padding: 32px 20px 24px; font-size: .75rem; color: var(--text3); }
 footer a { color: var(--text3); text-decoration: underline; }
 .muted { color: var(--text3); }
-#loader-overlay {
-  position: fixed;
-  inset: 0;
-  background: #fff;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  z-index: 9999;
-  transition: opacity .4s ease;
-}
+#loader-overlay { position: fixed; inset: 0; background: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 9999; transition: opacity .4s ease; }
 #loader-overlay.fade-out { opacity: 0; pointer-events: none; }
-.loader-spinner {
-  width: 40px;
-  height: 40px;
-  border: 3px solid var(--border);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: spin .8s linear infinite;
-  margin-bottom: 16px;
-}
+.loader-spinner { width: 40px; height: 40px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; margin-bottom: 16px; }
 @keyframes spin { to { transform: rotate(360deg); } }
-.loader-label {
-  font-size: .82rem;
-  color: var(--text2);
-  font-weight: 500;
-}
+.loader-label { font-size: .82rem; color: var(--text2); font-weight: 500; }
 .mt8  { margin-top: 8px; }
 .mt12 { margin-top: 12px; }
 @media (max-width: 480px) {
@@ -1247,6 +1020,7 @@ footer a { color: var(--text3); text-decoration: underline; }
   .impact-rank { font-size: 1.2rem; }
   .stat-grid { grid-template-columns: repeat(3,1fr); gap: 8px; }
   .team-grid { grid-template-columns: 1fr; }
+  .compet-grid { grid-template-columns: 1fr 1fr; }
 }
 </style>
 </head>
@@ -1258,32 +1032,42 @@ footer a { color: var(--text3); text-decoration: underline; }
 </div>
 
 <?php if (!$selectedCompet): ?>
+<!-- ── Sélection de la compétition ─────────────────────────────── -->
 <div class="selector-screen">
   <img src="/kps.png" alt="KPS" style="width:80px;height:80px;border-radius:18px;margin-bottom:20px;box-shadow:0 4px 16px rgba(58,80,178,.2)">
   <h1>Kayak Polo Stats</h1>
+  <p>KPI mais en mieux</p>
   <p>Quelle compétition veux-tu suivre ?</p>
   <form method="post">
-    <div class="team-grid" style="max-width:400px">
-      <button type="submit" name="set_compet" value="1" class="team-btn"
-              style="padding:22px 20px;font-size:1.1rem;font-weight:700"
-              onclick="document.querySelector('[name=compet]').value='N18'">
-        Championnat U18
-      </button>
-      <button type="submit" name="set_compet" value="1" class="team-btn"
-              style="padding:22px 20px;font-size:1.1rem;font-weight:700"
-              onclick="document.querySelector('[name=compet]').value='N15'">
-        Championnat U15
-      </button>
+    <?php
+      $byCategory = [];
+      foreach ($COMPETITIONS as $key => $info) {
+          $byCategory[$info['cat']][$key] = $info;
+      }
+    ?>
+    <?php foreach ($byCategory as $cat => $compets): ?>
+    <div class="compet-section">
+      <div class="compet-section-title"><?= h($cat) ?></div>
+      <div class="compet-grid">
+        <?php foreach ($compets as $key => $info): ?>
+        <button type="submit" name="set_compet" value="1" class="compet-btn"
+                onclick="document.querySelector('[name=compet]').value=<?= h(json_encode($key)) ?>">
+          <?= h($info['label']) ?>
+        </button>
+        <?php endforeach; ?>
+      </div>
     </div>
+    <?php endforeach; ?>
     <input type="hidden" name="compet" value="">
   </form>
   <p class="selector-note">Ce choix est mémorisé sur cet appareil.</p>
   <div class="selector-info">
-    Les données sont mises à jour toutes les 5 minutes depuis kayak-polo.info.
+    Une complétion manquante ? Dm insta : victor.dst3
   </div>
 </div>
 
 <?php elseif (!$selectedTeam): ?>
+<!-- ── Sélection de l'équipe ───────────────────────────────────── -->
 <div class="selector-screen">
   <img src="/kps.png" alt="KPS" style="width:80px;height:80px;border-radius:18px;margin-bottom:20px;box-shadow:0 4px 16px rgba(58,80,178,.2)">
   <h1>Kayak Polo Stats</h1>
@@ -1301,13 +1085,14 @@ footer a { color: var(--text3); text-decoration: underline; }
   </form>
   <p class="selector-note">Ce choix est mémorisé sur cet appareil.</p>
   <div class="selector-info">
-    Championnat de France <strong><?= $selectedCompet === 'N15' ? 'U15' : 'U18' ?></strong> 2026.<br>
-    Les données sont mises à jour toutes les 5 minutes depuis kayak-polo.info.<br>
+    <strong><?= h($competLabel) ?></strong> · Saison 2026<br>
+    Données mises à jour toutes les 5 minutes depuis kayak-polo.info.<br>
     <a href="?clear_compet=1" style="color:var(--accent)">Changer de compétition</a>
   </div>
 </div>
 
 <?php else: ?>
+<!-- ── App principale ─────────────────────────────────────────── -->
 <div class="topbar">
   <div class="topbar-inner">
     <span class="topbar-brand">
@@ -1315,7 +1100,7 @@ footer a { color: var(--text3); text-decoration: underline; }
       Kayak Polo Stats
     </span>
     <span class="topbar-team">
-      <span style="color:var(--text3);font-size:.75rem"><?= $selectedCompet === 'N15' ? 'U15' : 'U18' ?></span>
+      <span style="color:var(--text3);font-size:.75rem"><?= h($competLabel) ?></span>
       <?= h($myTeamName) ?>
       <a href="?clear_compet=1">Changer</a>
     </span>
@@ -1324,15 +1109,16 @@ footer a { color: var(--text3); text-decoration: underline; }
 <div class="tabs-wrap">
   <div class="tabs">
     <button class="tab-btn active" onclick="switchTab('infos',this)">Infos</button>
-    <button class="tab-btn"       onclick="switchTab('matchs',this)">Matchs</button>
-    <button class="tab-btn"       onclick="switchTab('stats',this)">Stats</button>
-    <button class="tab-btn"       onclick="switchTab('calendrier',this)">Calendrier</button>
-    <button class="tab-btn"       onclick="switchTab('buteurs',this)">Buteurs</button>
+    <button class="tab-btn"        onclick="switchTab('matchs',this)">Matchs</button>
+    <button class="tab-btn"        onclick="switchTab('stats',this)">Stats</button>
+    <button class="tab-btn"        onclick="switchTab('calendrier',this)">Calendrier</button>
+    <button class="tab-btn"        onclick="switchTab('buteurs',this)">Buteurs</button>
   </div>
 </div>
 
 <div class="main">
 
+  <!-- ════════════ TAB INFOS ════════════ -->
   <div id="tab-infos" class="tab-panel active">
     <?php
       $q      = mb_strtolower($selectedTeam);
@@ -1358,7 +1144,8 @@ footer a { color: var(--text3); text-decoration: underline; }
         <?php if ($myNext['date']): ?><span class="info-pill"><?= h(fmtDate($myNext['date'])) ?></span><?php endif; ?>
         <?php if ($myNext['heure']): ?><span class="info-pill"><strong><?= h($myNext['heure']) ?></strong></span><?php endif; ?>
         <?php if ($myNext['terrain']): ?><span class="info-pill">Terrain <?= h($myNext['terrain']) ?></span><?php endif; ?>
-        <?php if ($myNext['journee']): ?><span class="info-pill"><?= h($myNext['journee']) ?> · <?= h(journeeLieu($myNext['journee'])) ?></span><?php endif; ?>
+        <?php if ($myNext['journee'] && $myNext['journee'] !== '?'): ?><span class="info-pill"><?= h($myNext['journee']) ?></span><?php endif; ?>
+        <?php if ($myNext['lieu']): ?><span class="info-pill"><?= h($myNext['lieu']) ?></span><?php endif; ?>
       </div>
     </div>
     <?php else: ?>
@@ -1474,9 +1261,9 @@ footer a { color: var(--text3); text-decoration: underline; }
       </div>
     </div>
     <?php endif; ?>
-
   </div>
 
+  <!-- ════════════ TAB MATCHS ════════════ -->
   <div id="tab-matchs" class="tab-panel">
     <?php
       $myQ = mb_strtolower($selectedTeam ?? '');
@@ -1514,8 +1301,7 @@ footer a { color: var(--text3); text-decoration: underline; }
 
     <?php foreach ($champDates as $d):
       $isActive = ($d === $defaultDay);
-      $dt = DateTime::createFromFormat('d/m/Y', $d);
-      $dayLabel = $dt ? fmtDate($d) : $d;
+      $dayLabel = fmtDate($d);
     ?>
     <div class="day-section<?= $isActive?' active':'' ?>" data-day="<?= h($d) ?>">
       <div class="section-title" style="margin-top:0"><?= h($dayLabel) ?></div>
@@ -1556,6 +1342,7 @@ footer a { color: var(--text3); text-decoration: underline; }
               <?= $m['heure'] ? h($m['heure']) : '—' ?>
               <?= $m['terrain'] ? ' · Terrain '.h($m['terrain']) : '' ?>
               <?= ($m['journee'] && $m['journee']!=='?') ? ' · '.h($m['journee']) : '' ?>
+              <?= $m['lieu'] ? ' · '.h($m['lieu']) : '' ?>
             </div>
           </div>
           <div style="text-align:right;flex-shrink:0">
@@ -1575,6 +1362,7 @@ footer a { color: var(--text3); text-decoration: underline; }
     <?php endforeach; ?>
   </div>
 
+  <!-- ════════════ TAB STATS ════════════ -->
   <div id="tab-stats" class="tab-panel">
 
     <?php if ($myStats && $myStats['mj'] > 0): ?>
@@ -1664,7 +1452,7 @@ footer a { color: var(--text3); text-decoration: underline; }
     </div>
     <?php endif; ?>
 
-    <div class="section-title">Championnat de France <?= $selectedCompet === 'N15' ? 'U15' : 'U18' ?> 2026</div>
+    <div class="section-title"><?= h($competLabel) ?> 2026</div>
     <div class="card">
       <div class="stat-grid">
         <div class="stat-box"><div class="stat-box-val"><?= $totalJoues ?></div><div class="stat-box-lbl">Joués</div></div>
@@ -1675,8 +1463,8 @@ footer a { color: var(--text3); text-decoration: underline; }
     </div>
 
     <div class="notice">
-      <strong>Championnat de France <?= $selectedCompet === 'N15' ? 'U15' : 'U18' ?> 2026.</strong><br>
-      Les données sont mises à jour toutes les 5 minutes depuis kayak-polo.info.
+      <strong><?= h($competLabel) ?> 2026.</strong><br>
+      Données mises à jour toutes les 5 minutes depuis kayak-polo.info.
     </div>
     <div style="text-align:right;margin-top:4px">
       <a href="?clear_cache=1" style="font-size:.75rem;color:var(--text3);text-decoration:none">Actualiser les données</a>
@@ -1700,6 +1488,7 @@ footer a { color: var(--text3); text-decoration: underline; }
 
   </div>
 
+  <!-- ════════════ TAB CALENDRIER ════════════ -->
   <div id="tab-calendrier" class="tab-panel">
     <?php
       $matchesByJournee = [];
@@ -1707,18 +1496,29 @@ footer a { color: var(--text3); text-decoration: underline; }
           $j = $m['journee'] ?: '?';
           $matchesByJournee[$j][] = $m;
       }
-      $journeeOrder = ['J1','J2','J3','Finales','?'];
-      uksort($matchesByJournee, fn($a,$b) =>
-          (array_search($a,$journeeOrder)??99) <=> (array_search($b,$journeeOrder)??99)
-      );
+      // Tri chronologique des journées
+      uksort($matchesByJournee, function($a, $b) use ($matchesByJournee) {
+          $tsA = PHP_INT_MAX; $tsB = PHP_INT_MAX;
+          foreach ($matchesByJournee[$a] as $m) { $ts = matchTs($m); if ($ts < $tsA) $tsA = $ts; }
+          foreach ($matchesByJournee[$b] as $m) { $ts = matchTs($m); if ($ts < $tsB) $tsB = $ts; }
+          if ($a === '?') return 1;
+          if ($b === '?') return -1;
+          return $tsA <=> $tsB;
+      });
     ?>
     <?php foreach ($matchesByJournee as $jNom => $jMatches): ?>
     <?php
       usort($jMatches, fn($a,$b) => matchTs($a)<=>matchTs($b));
-      $jInfo      = $JOURNEES[$jNom] ?? null;
-      $datesStr   = $jInfo ? implode(' & ', array_map(fn($d) => fmtDate($d), $jInfo['dates'])) : '';
-      $lieuStr    = $jInfo['lieu'] ?? '';
       $jouesCount = count(array_filter($jMatches, fn($m) => $m['joue']));
+      // Récupérer les dates uniques de cette journée
+      $jDatesUniq = array_unique(array_filter(array_column($jMatches, 'date')));
+      usort($jDatesUniq, fn($a,$b) => (DateTime::createFromFormat('d/m/Y',$a)?->getTimestamp()??0) <=> (DateTime::createFromFormat('d/m/Y',$b)?->getTimestamp()??0));
+      $datesStr = implode(' & ', array_map(fn($d) => fmtDate($d), $jDatesUniq));
+      // Lieu majoritaire
+      $lieux = array_filter(array_column($jMatches, 'lieu'));
+      $lieuCounts = array_count_values($lieux);
+      arsort($lieuCounts);
+      $lieuStr = $lieuCounts ? array_key_first($lieuCounts) : '';
     ?>
     <div class="cal-journee">
       <div class="cal-journee-header">
@@ -1779,6 +1579,7 @@ footer a { color: var(--text3); text-decoration: underline; }
     <?php endif; ?>
   </div>
 
+  <!-- ════════════ TAB BUTEURS ════════════ -->
   <div id="tab-buteurs" class="tab-panel">
     <?php
       $top20 = array_slice($allScorers, 0, 20);
@@ -1786,9 +1587,7 @@ footer a { color: var(--text3); text-decoration: underline; }
       if ($selectedTeam && $allScorers) {
           $q2 = mb_strtolower($myTeamName ?: $selectedTeam);
           foreach ($allScorers as $s) {
-              if (str_contains(mb_strtolower($s['equipe']), $q2)) {
-                  $myTeamScorers[] = $s;
-              }
+              if (str_contains(mb_strtolower($s['equipe']), $q2)) $myTeamScorers[] = $s;
           }
       }
     ?>
@@ -1800,14 +1599,7 @@ footer a { color: var(--text3); text-decoration: underline; }
     <div class="card scorers-section">
       <div class="scorers-title">Buteurs — <?= h($myTeamName ?: $selectedTeam) ?></div>
       <table class="scorers-table">
-        <thead>
-          <tr>
-            <th>#</th>
-            <th>Joueur</th>
-            <th>Rang général</th>
-            <th>Buts</th>
-          </tr>
-        </thead>
+        <thead><tr><th>#</th><th>Joueur</th><th>Rang général</th><th>Buts</th></tr></thead>
         <tbody>
           <?php foreach ($myTeamScorers as $idx => $s): ?>
           <tr>
@@ -1828,18 +1620,9 @@ footer a { color: var(--text3); text-decoration: underline; }
         <p class="no-data">Aucune donnée disponible.</p>
       <?php else: ?>
       <table class="scorers-table">
-        <thead>
-          <tr>
-            <th>#</th>
-            <th>Joueur</th>
-            <th>Équipe</th>
-            <th>Buts</th>
-          </tr>
-        </thead>
+        <thead><tr><th>#</th><th>Joueur</th><th>Équipe</th><th>Buts</th></tr></thead>
         <tbody>
-          <?php
-            $myTeamQ = $selectedTeam ? mb_strtolower($myTeamName ?: $selectedTeam) : '';
-          ?>
+          <?php $myTeamQ = $selectedTeam ? mb_strtolower($myTeamName ?: $selectedTeam) : ''; ?>
           <?php foreach ($top20 as $s): ?>
           <?php $isMe = $myTeamQ && str_contains(mb_strtolower($s['equipe']), $myTeamQ); ?>
           <tr <?= $isMe ? 'class="me"' : '' ?>>
@@ -1853,10 +1636,8 @@ footer a { color: var(--text3); text-decoration: underline; }
       </table>
       <?php endif; ?>
     </div>
-
     <?php endif; ?>
   </div>
-
 
 </div>
 <?php endif; ?>
@@ -1896,33 +1677,30 @@ async function generatePDF() {
     const dc=c=>doc.setDrawColor(...c);
     const fw=(f,s)=>{doc.setFont('helvetica',f);doc.setFontSize(s);};
 
-    // Logo
     let logoB64=null;
     try { const r=await fetch('/kps.png'); const b=await r.blob(); logoB64=await new Promise(res=>{const fr=new FileReader();fr.onload=()=>res(fr.result);fr.readAsDataURL(b);}); } catch(e){}
 
-    const qrB64='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAiMAAAIjAQMAAADr5InyAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAGUExURQAAAP///6XZn90AAAAJcEhZcwAADsMAAA7DAcdvqGQAAAMFSURBVHja7ZxBduIwDIbV1wVLjuCj9GjTo3EUjtAlCx6a4kSxnYTOpCRg5O/fNPCSz7IUP9VSgszoj17ShzfVr3igvQ7yf3oSJWBLIxS8CwXKOpR3zXW8UgZ99ud8pK8OCRh18kgJ2IJ3m6Zw72pbkf7qT94lynWIK6XLJGPKub/gLbflTkpNtvijEOktbcG7rcSopftF46HpmxL/7hfasoQiFVECtjRC8RdpVmMrM3ogZa+5fuuXf1JqssXfjPBu/RR/3hW8u/1dl2lmH6BFAWhRRWkJRSqyhRltOSN/fiFGSqRfONITxZ6wJZVL8c9/dzhWWIUi7iihIgozasUvrEYivcwvOqfuuaCyHzBOOUX2WYOi7mxRvLshxd+MWEdb2gLlhrpEYAli0hPWlEmMcmNncz9F3FGCO1ugKCuASDuPdKbYVRgqStZ+sPawaTe0H+6kKJQNvVsTRZkR64hIVxOj1CUWu9TeEQvp/QBJFDvMU447ilRECdjSiC2sI/wiT/BusUko28lRWVdBjZKN3A3njiLuKMQIyuMpgRlV75dQfrMrMknUABxnEtNpLYpgy4a24F0ijXe92RK1n80B41pQd2LUOXULxhUlKCtTjswIW1hHULaldLJLi57woKwfMLcngQIFChQor0gZakGpJ1w+G2rKLn1PeeYEBQoUKFAeTZE1bbEyf8e1d8Qy4PhhIBtDht3E/ZSjO4pCmaUQ6VYo/mLk0Rad0yU1GDKdxxWlZAuUOYpiCxTul0ps8UdZy7szSg+ODvpIlEPfjbZ600nmtZgSKqKIO0pwZ4u/SBMj/PIcSvakkI7Th/1WhGncWYYCBQoUKC9PsfNsCzFUlD77Sw8yUaRcptUtKFCgQIHyRMpEWU9YB/XNYyhQoECB4oei9mxo9oufhc7FADVRxB3Fn3e5X4g0fqlsRpnK3UTMFV0BqBhOZOgJy82K0gtTpCJKcGdLwLt4t2nv1hbpiYxyvH4o3w/Yj4bTnzrLCyk12RLwy4a21DQjKK3EyN+MVqFI+AshEB/go70HYQAAAABJRU5ErkJggg==';
-    const instaB64='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAV4AAAFeCAMAAAD69YcoAAAAGXRFWHRTb2Z0d2FyZQBBZG9iZSBJbWFnZVJlYWR5ccllPAAAAyRpVFh0WE1MOmNvbS5hZG9iZS54bXAAAAAAADw/eHBhY2tldCBiZWdpbj0i77u/IiBpZD0iVzVNME1wQ2VoaUh6cmVTek5UY3prYzlkIj8+IDx4OnhtcG1ldGEgeG1sbnM6eD0iYWRvYmU6bnM6bWV0YS8iIHg6eG1wdGs9IkFkb2JlIFhNUCBDb3JlIDUuMy1jMDExIDY2LjE0NTY2MSwgMjAxMi8wMi8wNi0xNDo1NjoyNyAgICAgICAgIj4gPHJkZjpSREYgeG1sbnM6cmRmPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5LzAyLzIyLXJkZi1zeW50YXgtbnMjIj4gPHJkZjpEZXNjcmlwdGlvbiByZGY6YWJvdXQ9IiIgeG1sbnM6eG1wPSJodHRwOi8vbnMuYWRvYmUuY29tL3hhcC8xLjAvIiB4bWxuczp4bXBNTT0iaHR0cDovL25zLmFkb2JlLmNvbS94YXAvMS4wL21tLyIgeG1sbnM6c3RSZWY9Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC9zVHlwZS9SZXNvdXJjZVJlZiMiIHhtcDpDcmVhdG9yVG9vbD0iQWRvYmUgUGhvdG9zaG9wIENTNiAoTWFjaW50b3NoKSIgeG1wTU06SW5zdGFuY2VJRD0ieG1wLmlpZDo2QjZGRThGREM3OEExMUU3OUNDNEZCOEFBMTRCRUZBRiIgeG1wTU06RG9jdW1lbnRJRD0ieG1wLmRpZDo2QjZGRThGRUM3OEExMUU3OUNDNEZCOEFBMTRCRUZBRiI+IDx4bXBNTTpEZXJpdmVkRnJvbSBzdFJlZjppbnN0YW5jZUlEPSJ4bXAuaWlkOjZCNkZFOEZCQzc4QTExRTc5Q0M0RkI4QUExNEJFRkFGIiBzdFJlZjpkb2N1bWVudElEPSJ4bXAuZGlkOjZCNkZFOEZDQzc4QTExRTc5Q0M0RkI4QUExNEJFRkFGIi8+IDwvcmRmOkRlc2NyaXB0aW9uPiA8L3JkZjpSREY+IDwveDp4bXBtZXRhPiA8P3hwYWNrZXQgZW5kPSJyIj8+3H61bAAAAYBQTFRFx8bGu7q60M/P/v7+3t3dwcDAy8rKtLOz1NTUtbS0/f39vby8xsXFtrW1/Pz85+fn2dnZ+vr69vb2uLe3t7a2vLu78/Pzurm5v76+ubi4+Pj4+/v78fHxyMfH+fn58PDw9/f3vr29xcTEzs3NtLS0zczM6urq4+Li4eHhwsHBz87OwL+/8vLy7Ozs9PT07u7u4uLi2NfX7e3t3d3d9fX1ysnJ1tXV+/r63Nzc5OTk2djYt7e30tHR5ubm3Nvb397e6enp09PT0dDQ/v39ycjIw8LC4ODg19fX2trazMvL1dTU1tbW39/f7+/v6unp6+vr7Ovr5eXl6ejo7+7uxcXFxMPD09LSvb2919bW6Ojo4eDg6Ofn4+Pj5uXl4uHhz8/P5eTkysrKxMTE29ra6+rqw8PD2tnZ5OPj9fT08vHx3dzc1dXV4N/f29vb0tLSwMDAzc3N7ezs8O/v+Pf33t7ezs7O5+bmycnJy8vL2NjY1NPTyMjIzMzM////s7Ky////0Z1EKwAAAIB0Uk5T/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////wA4BUtnAAAYTElEQVR42uyd52MaudPHgaVjwBQbm2LALe69927HJcWJkzjt0n65JJd2aXeXHKt//XGSu3sAaWF3Z7QS5fviXlzwrvRBSKPRzMhGmuIoWxNBE28Tb1NNvE28DCmRmfTJ6Gk4vDoxMfElHN4YzaZn5pt4QerKhtfvbO3stsVVtmKB/81u7e+dpiNNvAYUmRqYc7uCqn7FB/v2J05STbxVZoH2xbmMXTWrtp391RdNvEzlVue6gypc8czkaVcTb7HGHv7SpmKqY2Ux18T7YwW7voWL9j/Em/dSDY43/XxX5ShPy6uxRsWrXL1lV/krfzTeeHiV/q1O1Sq1fR1vKLwn3oRqrQKTIw2CN7nWoYrQ7utI3eNVzmc9qij5ekbrGm/yoE0Vq471+XrFm/3cq4pX8NZYHeJVwt2qLPrjap3h9Q90qDJpd1WpH7whp12VTfkJpT7whpwJVUbdtgIwb7z+T3LC/QH4V6W28SoTbarMGr5Xy3ivDKuy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';
+    const qrB64='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAIjAQMAAADr5InyAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAGUExURQAAAP///6XZn90AAAAJcEhZcwAADsMAAA7DAcdvqGQAAAMFSURBVHja7ZxBduIwDIbV1wVLjuCj9GjTo3EUjtAlCx6a4kSxnYTOpCRg5O/fNPCSz7IUP9VSgszoj17ShzfVr3igvQ7yf3oSJWBLIxS8CwXKOpR3zXW8UgZ99ud8pK8OCRh18kgJ2IJ3m6Zw72pbkf7qT94lynWIK6XLJGPKub/gLbflTkpNtvijEOktbcG7rcSopftF46HpmxL/7hfasoQiFVECtjRC8RdpVmMrM3ogZa+5fuuXf1JqssXfjPBu/RR/3hW8u/1dl2lmH6BFAWhRRWkJRSqyhRltOSN/fiFGSqRfONITxZ6wJZVL8c9/dzhWWIUi7iihIgozasUvrEYivcwvOqfuuaCyHzBOOUX2WYOi7mxRvLshxd+MWEdb2gLlhrpEYAli0hPWlEmMcmNncz9F3FGCO1ugKCuASDuPdKbYVRgqStZ+sPawaTe0H+6kKJQNvVsTRZkR64hIVxOj1CUWu9TeEQvp/QBJFDvMU447ilRECdjSiC2sI/wiT/BusUko28lRWVdBjZKN3A3njiLuKMQIyuMpgRlV75dQfrMrMknUABxnEtNpLYpgy4a24F0ijXe92RK1n80B41pQd2LUOXULxhUlKCtTjswIW1hHULaldLJLi57woKwfMLcngQIFChQor0gZakGpJ1w+G2rKLn1PeeYEBQoUKFAeTZE1bbEyf8e1d8Qy4PhhIBtDht3E/ZSjO4pCmaUQ6VYo/mLk0Rad0yU1GDKdxxWlZAuUOYpiCxTul0ps8UdZy7szSg+ODvpIlEPfjbZ600nmtZgSKqKIO0pwZ4u/SBMj/PIcSvakkI7Th/1WhGncWYYCBQoUKC9PsfNsCzFUlD77Sw8yUaRcptUtKFCgQIHyRMpEWU9YB/XNYyhQoECB4oei9mxo9oufhc7FADVRxB3Fn3e5X4g0fqlsRpnK3UTMFV0BqBhOZOgJy82K0gtTpCJKcGdLwLt4t2nv1hbpiYxyvH4o3w/Yj4bTnzrLCyk12RLwy4a21DQjKK3EyN+MVqFI+AshEB/go70HYQAAAABJRU5ErkJggg==';
+    const instaB64='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAV4AAAFeCAMAAAD69YcoAAAAGXRFWHRTb2Z0d2FyZQBBZG9iZSBJbWFnZVJlYWR5ccllPAAAAyRpVFh0WE1MOmNvbS5hZG9iZS54bXAAAAAAADw/eHBhY2tldCBiZWdpbj0i77u/IiBpZD0iVzVNME1wQ2VoaUh6cmVTek5UY3prYzlkIj8+IDx4OnhtcG1ldGEgeG1sbnM6eD0iYWRvYmU6bnM6bWV0YS8iIHg6eG1wdGs9IkFkb2JlIFhNUCBDb3JlIDUuMy1jMDExIDY2LjE0NTY2MSwgMjAxMi8wMi8wNi0xNDo1NjoyNyAgICAgICAgIj4gPHJkZjpSREYgeG1sbnM6cmRmPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5LzAyLzIyLXJkZi1zeW50YXgtbnMjIj4gPHJkZjpEZXNjcmlwdGlvbiByZGY6YWJvdXQ9IiIgeG1sbnM6eG1wPSJodHRwOi8vbnMuYWRvYmUuY29tL3hhcC8xLjAvIiB4bWxuczp4bXBNTT0iaHR0cDovL25zLmFkb2JlLmNvbS94YXAvMS4wL21tLyIgeG1sbnM6c3RSZWY9Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC9zVHlwZS9SZXNvdXJjZVJlZiMiIHhtcDpDcmVhdG9yVG9vbD0iQWRvYmUgUGhvdG9zaG9wIENTNiAoTWFjaW50b3NoKSIgeG1wTU06SW5zdGFuY2VJRD0ieG1wLmlpZDo2QjZGRThGREM3OEExMUU3OUNDNEZCOEFBMTRCRUZBRiIgeG1wTU06RG9jdW1lbnRJRD0ieG1wLmRpZDo2QjZGRThGRUM3OEExMUU3OUNDNEZCOEFBMTRCRUZBRiI+IDx4bXBNTTpEZXJpdmVkRnJvbSBzdFJlZjppbnN0YW5jZUlEPSJ4bXAuaWlkOjZCNkZFOEZCQzc4QTExRTc5Q0M0RkI4QUExNEJFRkFGIiBzdFJlZjpkb2N1bWVudElEPSJ4bXAuZGlkOjZCNkZFOEZDQzc4QTExRTc5Q0M0RkI4QUExNEJFRkFGIi8+IDwvcmRmOkRlc2NyaXB0aW9uPiA8L3JkZjpSREY+IDwveDp4bXBtZXRhPiA8P3hwYWNrZXQgZW5kPSJyIj8+3H61bAAAAYBQTFRFx8bGu7q60M/P/v7+3t3dwcDAy8rKtLOz1NTUtbS0/f39vby8xsXFtrW1/Pz85+fn2dnZ+vr69vb2uLe3t7a2vLu78/Pzurm5v76+ubi4+Pj4+/v78fHxyMfH+fn58PDw9/f3vr29xcTEzs3NtLS0zczM6urq4+Li4eHhwsHBz87OwL+/8vLy7Ozs9PT07u7u4uLi2NfX7e3t3d3d9fX1ysnJ1tXV+/r63Nzc5OTk2djYt7e30tHR5ubm3Nvb397e6enp09PT0dDQ/v39ycjIw8LC4ODg19fX2trazMvL1dTU1tbW39/f7+/v6unp6+vr7Ovr5eXl6ejo7+7uxcXFxMPD09LSvb2919bW6Ojo4eDg6Ofn4+Pj5uXl4uHhz8/P5eTkysrKxMTE29ra6+rqw8PD2tnZ5OPj9fT08vHx3dzc1dXV4N/f29vb0tLSwMDAzc3N7ezs8O/v+Pf33t7ezs7O5+bmycnJy8vL2NjY1NPTyMjIzMzM////s7Ky////0Z1EKwAAAIB0Uk5T/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////wA4BUtnAAAYTElEQVR42uyd52MaredPHgaVjwBQbm2LALe69927HJcWJkzjt0n65JJd2aXeXHKt//XGSu3sAaWF3Z7QS5fviXlzwrvRBSKPRzMhGmuIoWxNBE28Tb1NNvE28DCmRmfTJ6Gk4vDoxMfElHN4YzaZn5pt4QerKhtfvbO3stsVVtmKB/81u7e+dpiNNvAYUmRqYc7uCqn7FB/v2J05STbxVZoH2xbmMXTWrtp391RdNvEzlVue6gypc8czkaVcTb7HGHv7SpmKqY2Ux18T7YwW7voWL9j/Em/dSDY43/XxX5ShPy6uxRsWrXL1lV/krfzTeeHiV/q1O1Sq1fR1vKLwn3oRqrQKTIw2CN7nWoYrQ7utI3eNVzmc9qij5ekbrGm/yoE0Vq471+XrFm/3cq4pX8NZYHeJVwt2qLPrjap3h9Q90qDJpd1WpH7whp12VTfkJpT7whpwJVUbdtgIwb7z+T3LC/QH4V6W28SoTbarMGr5Xy3ivDKu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';
 
-    // ── HEADER compact (18mm) ──
+    // Header
     const hH=18;
     fc(navy); doc.roundedRect(M,y,CW,hH,3,3,'F');
     if(logoB64){ doc.addImage(logoB64,'PNG',M+4,y+3,12,12); }
     else { fc(blue); doc.roundedRect(M+4,y+3,12,12,2,2,'F'); fw('bold',7);tc(white);doc.text('KP',M+10,y+10.5,{align:'center'}); }
     fw('bold',11); tc(white);
-    doc.text('Championnat de France '+d.compet+' 2026', M+20, y+8);
+    doc.text(d.compet+' 2026', M+20, y+8);
     fw('normal',7); tc(t3);
     doc.text('KAYAK POLO STATS', M+20, y+14);
     fw('bold',8.5); tc([210,220,235]);
-    doc.text(d.journee+' — '+d.lieu, W-M-3, y+8, {align:'right'});
+    doc.text(d.journee, W-M-3, y+8, {align:'right'});
     fw('normal',6.5); tc(t3);
     doc.text(d.dates.map(x=>x.substring(0,5)).join(' & '), W-M-3, y+14, {align:'right'});
     y += hH+6;
 
-    // ── Team name ──
     fw('bold',12); tc(t1); doc.text(d.team, M, y);
     y += 9;
 
-    // ── Days ──
     const rH=13, dayGap=4, dayHeaderH=10;
     for(const [dateStr,dayMs] of Object.entries(d.byDay)){
       if(!dayMs.length) continue;
@@ -1931,22 +1709,18 @@ async function generatePDF() {
       const dn=['Dimanche','Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi'][dt2.getDay()];
       const mn=['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'][dt2.getMonth()];
       const dayLabel=dn+' '+p[0]+' '+mn;
-
       dc(navy); doc.setLineWidth(0.5);
       doc.line(M, y+dayHeaderH-1, W-M, y+dayHeaderH-1);
       fw('bold',9); tc(navy); doc.text(dayLabel.toUpperCase(), M, y+7);
       fw('normal',7); tc(t3); doc.text(dayMs.length+' match'+(dayMs.length>1?'s':''), W-M-3, y+7, {align:'right'});
       y += dayHeaderH+2;
-
       for(const m of dayMs){
         fc(rowBg); dc(lineC); doc.setLineWidth(0.15);
         doc.roundedRect(M, y, CW, rH, 1.5, 1.5, 'FD');
         const barC=m.type==='match'?blue:(m.type==='arbi_p'?t2:t3);
         fc(barC); doc.rect(M, y, 3, rH, 'F');
-
         fw('bold',8.5); tc(t1); doc.text(m.heure||'--:--', M+5, y+5.5);
         if(m.terrain){ fw('bold',6); tc(t3); doc.text('T'+m.terrain, M+5, y+10.5); }
-
         const tx=M+22;
         if(m.type==='match'){
           fw('bold',8.5);
@@ -1964,7 +1738,6 @@ async function generatePDF() {
         if(m.arbitre_principal) arbi.push('P: '+m.arbitre_principal);
         if(m.arbitre_secondaire) arbi.push('S: '+m.arbitre_secondaire);
         if(arbi.length){ fw('normal',6); tc(t3); doc.text(arbi.join('   '), tx, y+10.5); }
-
         if(m.joue&&m.score){
           let sc=t1; if(m.type==='match'){const r=m.is_team_a?m.resultat_a:m.resultat_b;sc=r==='V'?green:(r==='D'?red:amber);}
           fw('bold',11); tc(sc); doc.text(m.score, W-M-3, y+7.5, {align:'right'});
@@ -1977,21 +1750,17 @@ async function generatePDF() {
       }
       y += dayGap;
     }
-
     if(!Object.keys(d.byDay).length){
       fw('normal',10); tc(t2); doc.text('Aucun match trouvé.', M, y+10); y+=20;
     }
 
-    // ── FOOTER ──
+    // Footer
     const qrS=18, instaS=14, footerY=H-M-qrS;
     dc(lineC); doc.setLineWidth(0.3); doc.line(M, footerY-5, W-M, footerY-5);
-    // QR site — coin bas droit
     doc.addImage(qrB64,'PNG', W-M-qrS, footerY, qrS, qrS);
-    // Logo insta — coin bas gauche, cliquable
     const instaY=footerY+(qrS-instaS)/2;
     doc.addImage(instaB64,'PNG', M, instaY, instaS, instaS);
     doc.link(M, instaY, instaS, instaS, {url:'https://www.instagram.com/victor.dst3/'});
-    // Texte centre footer
     fw('normal',6.5); tc(t3);
     const cx=M+instaS+5;
     doc.text('kp-stats.duckdns.org', cx, footerY+5);
@@ -2002,7 +1771,8 @@ async function generatePDF() {
     doc.text('Généré le '+now.toLocaleDateString('fr-FR')+' à '+now.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}), cx, footerY+qrS);
 
     const slug=d.team.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9]+/g,'-').toLowerCase();
-    doc.save('kps-'+slug+'-'+d.journee.toLowerCase()+'.pdf');
+    const jSlug=(d.journee||'prog').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9]+/g,'-').toLowerCase();
+    doc.save('kps-'+slug+'-'+jSlug+'.pdf');
 
   } catch(e) {
     console.error(e); alert('Erreur PDF : '+e.message);
@@ -2010,7 +1780,6 @@ async function generatePDF() {
     btn.innerHTML=origHTML; btn.disabled=false;
   }
 }
-
 
 function switchDay(day, btn) {
   document.querySelectorAll('.day-section').forEach(s => s.classList.remove('active'));
