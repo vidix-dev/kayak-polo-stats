@@ -12,13 +12,14 @@ define('STATS_KEY',  'kps_vidix_2026');
 // ── Compétitions disponibles ──────────────────────────────────────
 // 'group' = paramètre Group= dans l'URL KPI
 $COMPETITIONS = [
-    'N1H' => ['label' => 'Nationale 1 Hommes',  'group' => 'N1H', 'cat' => 'Nationales'],
-    'N1D' => ['label' => 'Nationale 1 Dames',   'group' => 'N1D', 'cat' => 'Nationales'],
-    'N2H' => ['label' => 'Nationale 2 Hommes',  'group' => 'N2H', 'cat' => 'Nationales'],
-    'N2D' => ['label' => 'Nationale 2 Dames',   'group' => 'N2D', 'cat' => 'Nationales'],
-    'N3'  => ['label' => 'Nationale 3',          'group' => 'N3',  'cat' => 'Nationales'],
-    'N18' => ['label' => 'Championnat U18',      'group' => 'N18', 'cat' => 'Nationales Jeunes'],
-    'N15' => ['label' => 'Championnat U15',      'group' => 'N15', 'cat' => 'Nationales Jeunes'],
+    'N1H' => ['label' => 'Nationale 1 Hommes',       'group' => 'N1H', 'cat' => 'Nationales'],
+    'N1D' => ['label' => 'Nationale 1 Dames',         'group' => 'N1D', 'cat' => 'Nationales'],
+    'N2H' => ['label' => 'Nationale 2 Hommes',        'group' => 'N2H', 'cat' => 'Nationales'],
+    'N2D' => ['label' => 'Nationale 2 Dames',         'group' => 'N2D', 'cat' => 'Nationales'],
+    'N3'  => ['label' => 'Nationale 3',               'group' => 'N3',  'cat' => 'Nationales'],
+    'NEM' => ['label' => 'Nationale Excellence Mixte','group' => 'NEM', 'cat' => 'Nationales'],
+    'N18' => ['label' => 'Championnat U18',           'group' => 'N18', 'cat' => 'Jeunes'],
+    'N15' => ['label' => 'Championnat U15',           'group' => 'N15', 'cat' => 'Jeunes'],
 ];
 
 function logVisit(string $compet, string $team): void {
@@ -784,6 +785,28 @@ body {
   box-shadow: 0 0 0 3px rgba(0,113,227,.15);
   outline: none;
 }
+.compet-btn-disabled {
+  background: var(--bg3);
+  border-color: var(--border);
+  color: var(--text3);
+  cursor: not-allowed;
+  opacity: .6;
+  box-shadow: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.compet-soon {
+  font-size: .68rem;
+  font-weight: 700;
+  background: var(--border);
+  color: var(--text3);
+  border-radius: 20px;
+  padding: 2px 8px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
 .team-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
@@ -1032,11 +1055,32 @@ footer a { color: var(--text3); text-decoration: underline; }
 </div>
 
 <?php if (!$selectedCompet): ?>
+<?php
+// ── Vérifie quelles compétitions ont des données ──────────────────
+function hasData(string $key, array $info): bool {
+    $cacheFile = __DIR__ . '/cache/matches_' . $key . '.json';
+    if (file_exists($cacheFile) && (time() - filemtime($cacheFile)) < 3600) {
+        $data = json_decode(file_get_contents($cacheFile), true);
+        if (is_array($data) && count($data) > 0) return true;
+    }
+    $url  = 'https://www.kayak-polo.info/kpmatchs.php?Compet=*&Group=' . urlencode($info['group']) . '&Saison=2026';
+    $html = curlGet($url);
+    if (!$html) return false;
+    return (bool) preg_match('/<td[^>]*>\s*\d+\s*<\/td>/', $html);
+}
+$competAvailability = [];
+foreach ($COMPETITIONS as $key => $info) {
+    $competAvailability[$key] = hasData($key, $info);
+}
+?>
 <!-- ── Sélection de la compétition ─────────────────────────────── -->
 <div class="selector-screen">
   <img src="/kps.png" alt="KPS" style="width:80px;height:80px;border-radius:18px;margin-bottom:20px;box-shadow:0 4px 16px rgba(58,80,178,.2)">
   <h1>Kayak Polo Stats</h1>
-  <p>KPI mais en mieux</p>
+  <div style="display:inline-flex;align-items:center;gap:7px;background:#0f172a;color:#fff;border-radius:10px;padding:6px 14px;font-size:.82rem;font-weight:700;letter-spacing:.04em;margin-bottom:18px;">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+    kayak-polo.info
+  </div>
   <p>Quelle compétition veux-tu suivre ?</p>
   <form method="post">
     <?php
@@ -1049,11 +1093,20 @@ footer a { color: var(--text3); text-decoration: underline; }
     <div class="compet-section">
       <div class="compet-section-title"><?= h($cat) ?></div>
       <div class="compet-grid">
-        <?php foreach ($compets as $key => $info): ?>
+        <?php foreach ($compets as $key => $info):
+          $available = $competAvailability[$key] ?? false;
+        ?>
+        <?php if ($available): ?>
         <button type="submit" name="set_compet" value="1" class="compet-btn"
                 onclick="document.querySelector('[name=compet]').value=<?= h(json_encode($key)) ?>">
           <?= h($info['label']) ?>
         </button>
+        <?php else: ?>
+        <div class="compet-btn compet-btn-disabled" title="Aucune donnée disponible">
+          <?= h($info['label']) ?>
+          <span class="compet-soon">Bientôt</span>
+        </div>
+        <?php endif; ?>
         <?php endforeach; ?>
       </div>
     </div>
@@ -1062,7 +1115,8 @@ footer a { color: var(--text3); text-decoration: underline; }
   </form>
   <p class="selector-note">Ce choix est mémorisé sur cet appareil.</p>
   <div class="selector-info">
-    Une complétion manquante ? Dm insta : victor.dst3
+    Une compétition manquante ? Dm insta :
+    <a href="https://www.instagram.com/victor.dst3/" target="_blank" rel="noopener" style="color:var(--accent);font-weight:600;">victor.dst3</a>
   </div>
 </div>
 
@@ -1086,7 +1140,7 @@ footer a { color: var(--text3); text-decoration: underline; }
   <p class="selector-note">Ce choix est mémorisé sur cet appareil.</p>
   <div class="selector-info">
     <strong><?= h($competLabel) ?></strong> · Saison 2026<br>
-    Données mises à jour toutes les 5 minutes depuis kayak-polo.info.<br>
+    Une compétition manquante ? Dm insta : <a href="https://www.instagram.com/victor.dst3/" target="_blank" rel="noopener" style="color:var(--accent);font-weight:600;">victor.dst3</a><br>
     <a href="?clear_compet=1" style="color:var(--accent)">Changer de compétition</a>
   </div>
 </div>
