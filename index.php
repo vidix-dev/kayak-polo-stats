@@ -18,8 +18,14 @@ $COMPETITIONS = [
     'N2D' => ['label' => 'Nationale 2 Dames',         'group' => 'N2D', 'cat' => 'Nationales'],
     'N3'  => ['label' => 'Nationale 3',               'group' => 'N3',  'cat' => 'Nationales'],
     'NEM' => ['label' => 'Nationale Excellence Mixte','group' => 'NEM', 'cat' => 'Nationales'],
-    'N18' => ['label' => 'Championnat U18',           'group' => 'N18', 'cat' => 'Jeunes'],
-    'N15' => ['label' => 'Championnat U15',           'group' => 'N15', 'cat' => 'Jeunes'],
+    'N18' => ['label' => 'Championnat U18',           'group' => 'N18', 'cat' => 'Nationales Jeunes'],
+    'N15' => ['label' => 'Championnat U15',           'group' => 'N15', 'cat' => 'Nationales Jeunes'],
+    'REG17' => ['label' => 'Grand-Est',           'group' => 'REG17', 'cat' => 'Championnat régional'],
+    'REG20' => ['label' => 'Normandie',           'group' => 'REG20', 'cat' => 'Championnat régional'],
+    'REG18' => ['label' => 'AURA',           'group' => 'REG18', 'cat' => 'Championnat régional'],
+    'REG07' => ['label' => 'Bretagne',           'group' => 'REG07', 'cat' => 'Championnat régional'],
+    'REG14' => ['label' => 'Ile de France',           'group' => 'REG14', 'cat' => 'Championnat régional'],
+    'REG04' => ['label' => 'Pays de la Loire',           'group' => 'REG04', 'cat' => 'Championnat régional'],
 ];
 
 function logVisit(string $compet, string $team): void {
@@ -1077,9 +1083,8 @@ foreach ($COMPETITIONS as $key => $info) {
 <div class="selector-screen">
   <img src="/kps.png" alt="KPS" style="width:80px;height:80px;border-radius:18px;margin-bottom:20px;box-shadow:0 4px 16px rgba(58,80,178,.2)">
   <h1>Kayak Polo Stats</h1>
-  <div style="display:inline-flex;align-items:center;gap:7px;background:#0f172a;color:#fff;border-radius:10px;padding:6px 14px;font-size:.82rem;font-weight:700;letter-spacing:.04em;margin-bottom:18px;">
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
-    kayak-polo.info
+  <div style="display:inline-flex;align-items:center;gap:7px;background:#3f5ab6;color:#fff;border-radius:10px;padding:6px 14px;font-size:.82rem;font-weight:700;letter-spacing:.04em;margin-bottom:18px;">
+    Kpi mais en mieux
   </div>
   <p>Quelle compétition veux-tu suivre ?</p>
   <form method="post">
