@@ -1050,6 +1050,28 @@ footer a { color: var(--text3); text-decoration: underline; }
   .stat-grid { grid-template-columns: repeat(3,1fr); gap: 8px; }
   .team-grid { grid-template-columns: 1fr; }
   .compet-grid { grid-template-columns: 1fr 1fr; }
+  .tabs {
+    padding: 8px 12px 10px;
+    flex-wrap: wrap;
+    gap: 6px;
+    overflow-x: visible;
+  }
+  .tab-btn {
+    flex: 1 1 calc(33.333% - 6px);
+    min-width: 0;
+    padding: 8px 6px;
+    border-bottom: none;
+    border-radius: 10px;
+    background: var(--bg3);
+    text-align: center;
+    white-space: normal;
+    line-height: 1.2;
+    font-size: .8rem;
+  }
+  .tab-btn.active {
+    background: rgba(0,113,227,.12);
+    border-bottom-color: transparent;
+  }
 }
 </style>
 </head>
